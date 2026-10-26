@@ -1,0 +1,2078 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quiz – prototyp</title>
+
+<!-- KaTeX: wyświetlanie wzorów w treści pytań i odpowiedzi -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+<!-- GeoGebra Apps API -->
+<script async src="https://www.geogebra.org/apps/deployggb.js"></script>
+
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #657084;
+    --line: #dde1e8; --accent: #2457d6; --ok: #1c7c4a; --ok-bg: #e6f4ec;
+    --bad: #b3261e; --bad-bg: #fbe9e7; --info: #7a5b00; --info-bg: #fff4d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171d; --card: #1c212b; --text: #e8ebf1; --muted: #98a2b5;
+      --line: #313846; --accent: #7aa2ff; --ok: #6fd39b; --ok-bg: #16301f;
+      --bad: #ff8f86; --bad-bg: #3a1c1a; --info: #f0cf6a; --info-bg: #35290d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center;
+           justify-content: space-between; padding: 14px 20px;
+           background: var(--card); border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0; font-size: 1.15rem; }
+  nav { display: flex; gap: 6px; flex-wrap: wrap; }
+  nav button { border: 1px solid var(--line); background: transparent; color: var(--text);
+               padding: 7px 14px; border-radius: 8px; cursor: pointer; font: inherit; }
+  nav button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  main { max-width: 780px; margin: 0 auto; padding: 20px 16px 60px; }
+  main.wide { max-width: 1060px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px; }
+  .meta { color: var(--muted); font-size: .85rem; margin-bottom: 6px; }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; margin-bottom: 14px; overflow: hidden; }
+  .bar > div { height: 100%; background: var(--accent); transition: width .25s; }
+  .prompt { font-size: 1.1rem; margin-bottom: 14px; }
+  .body { margin-bottom: 16px; }
+  .opt { display: flex; gap: 10px; align-items: center; padding: 10px 12px; margin-bottom: 8px;
+         border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+  .opt:hover { border-color: var(--accent); }
+  .opt input { width: 18px; height: 18px; accent-color: var(--accent); }
+  input[type=text], input[type=number], select, textarea {
+         width: 100%; padding: 9px 12px; font: inherit; color: var(--text);
+         background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
+  textarea { min-height: 150px; resize: vertical; }
+  math-field { display: block; width: 100%; font-size: 1.3rem; padding: 8px 12px; color: var(--text);
+         background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
+  .hint { color: var(--muted); font-size: .85rem; margin-top: 6px; }
+  .ggb { max-width: 100%; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; min-height: 120px; }
+  button.primary { background: var(--accent); color: #fff; border: 0; padding: 10px 22px;
+         border-radius: 10px; font: inherit; font-weight: 600; cursor: pointer; }
+  button.secondary { background: transparent; color: var(--text); border: 1px solid var(--line);
+         padding: 9px 18px; border-radius: 10px; font: inherit; cursor: pointer; }
+  button.small { padding: 3px 9px; font-size: .85rem; border-radius: 8px; }
+  button.danger { color: var(--bad); }
+  button:disabled { opacity: .4; cursor: default; }
+  .feedback { margin: 0 0 16px; padding: 12px 14px; border-radius: 10px; }
+  .feedback.correct { background: var(--ok-bg); color: var(--ok); }
+  .feedback.wrong { background: var(--bad-bg); color: var(--bad); }
+  .feedback.manual { background: var(--info-bg); color: var(--info); }
+  .feedback strong { display: block; margin-bottom: 4px; }
+  .feedback div { color: var(--text); }
+  .score { font-size: 2.4rem; font-weight: 700; margin: 4px 0 10px; }
+  .nav { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; }
+  .slide h2 { margin-top: 0; }
+
+  /* ---- edytor ---- */
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+  .toolbar select { width: auto; }
+  .toolbar .status { color: var(--muted); font-size: .85rem; margin-left: auto; }
+  .toolbar .status.bad { color: var(--bad); }
+  .editor { display: grid; grid-template-columns: 290px 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 760px) { .editor { grid-template-columns: 1fr; } }
+  .qlist { display: flex; flex-direction: column; gap: 6px; }
+  .qrow { display: flex; gap: 6px; align-items: center; padding: 8px 10px; background: var(--card);
+          border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+  .qrow.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .qrow .t { flex: 1; min-width: 0; }
+  .qrow .t b { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .qrow .t span { font-size: .75rem; color: var(--muted); }
+  .qrow .warn { color: var(--bad); font-weight: 700; }
+  .field { margin-bottom: 14px; }
+  .field > label { display: block; font-weight: 600; margin-bottom: 4px; font-size: .9rem; }
+  .editor textarea { min-height: 0; }
+  .preview { margin-top: 6px; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 10px; min-height: 2em; }
+  .optrow { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .optrow input[type=text] { flex: 1; }
+  .optrow input[type=radio], .optrow input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); flex: none; }
+  .numrow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .problems { margin: 0 0 14px; padding: 10px 14px 10px 30px; background: var(--info-bg); color: var(--info); border-radius: 10px; }
+
+  /* ---- podpowiedzi ---- */
+  .hintlist { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+  .hintitem { padding: 10px 14px; border-radius: 10px; background: var(--info-bg); color: var(--text);
+              border-left: 4px solid var(--info); }
+  .hintctl { margin-bottom: 16px; }
+  .hintrow { display: grid; grid-template-columns: 24px 1fr auto; gap: 8px; align-items: start; margin-bottom: 10px; }
+  .hintrow .hn { font-weight: 600; color: var(--muted); padding-top: 8px; }
+  .hintrow .hbtns { display: flex; gap: 4px; padding-top: 4px; }
+  .mini { margin-top: 8px; padding: 10px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  .miniq { font-weight: 600; margin-bottom: 8px; }
+  .mini .opt { margin-bottom: 6px; }
+  .opt.ok { border-color: var(--ok); background: var(--ok-bg); }
+  .opt.bad { border-color: var(--bad); background: var(--bad-bg); opacity: .75; }
+  .minifb { margin-top: 4px; font-size: .9rem; min-height: 1.3em; }
+  .minifb.ok { color: var(--ok); } .minifb.bad { color: var(--bad); }
+  .mini-box { margin-top: 8px; padding: 12px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; }
+  .mini-box .field { margin-bottom: 8px; }
+  /* ---- logowanie, tabele, widoki nauczyciela i ucznia ---- */
+  header .userbox { display: flex; gap: 10px; align-items: center; font-size: .9rem; color: var(--muted); margin-left: auto; }
+  .login { max-width: 380px; margin: 40px auto 12px; }
+  .login h2 { margin-top: 0; }
+  .loginerr { color: var(--bad); min-height: 1.4em; margin-bottom: 8px; font-size: .9rem; }
+  .loginalt { max-width: 380px; margin: 0 auto; text-align: center; }
+  .note { padding: 10px 14px; border-radius: 10px; background: var(--info-bg); color: var(--info); margin-bottom: 14px; font-size: .9rem; }
+  .note.bad { background: var(--bad-bg); color: var(--bad); }
+  .note.good { background: var(--ok-bg); color: var(--ok); }
+  .tablewrap { overflow-x: auto; }
+  .tbl { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  .tbl th, .tbl td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .tbl th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+  .tbl tr.click { cursor: pointer; }
+  .tbl tr.click:hover, .tbl tr.sel { background: var(--bg); }
+  .tbl input[type=text], .tbl input[type=number] { padding: 5px 8px; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: .75rem; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .badge.on { color: var(--ok); border-color: var(--ok); }
+  .badge.warn { color: var(--info); border-color: var(--info); }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; align-items: center; }
+  .filters select, .filters input[type=text] { width: auto; }
+  .filters label { display: flex; gap: 6px; align-items: center; font-size: .9rem; }
+  .pick { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 6px; margin-bottom: 8px; }
+  .pickrow { display: flex; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 8px; }
+  .pickrow .t { flex: 1; min-width: 0; }
+  .pickrow input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); flex: none; }
+  .setcard { margin-bottom: 12px; }
+  .setcard h3 { margin: 0 0 4px; }
+  .rowbtns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .detail { margin-top: 16px; }
+  .detail textarea { min-height: 0; }
+  .grade { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
+  .grade input[type=number] { width: 90px; }
+  .grade textarea { flex: 1; min-width: 160px; }
+  .sumrow { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--line); }
+  .sumrow .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sumrow .st { font-size: .85rem; white-space: nowrap; }
+  .sumrow .st.correct { color: var(--ok); } .sumrow .st.wrong { color: var(--bad); } .sumrow .st.manual { color: var(--info); }
+  .sumrow .hn2 { font-size: .85rem; color: var(--muted); white-space: nowrap; min-width: 4.5em; text-align: right; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Quiz</h1>
+  <nav id="nav"></nav>
+  <div class="userbox" id="userbox"></div>
+</header>
+<main>
+  <section id="login" hidden></section>
+  <section id="home" hidden></section>
+  <section id="quiz" hidden></section>
+  <section id="slides" hidden></section>
+  <section id="editor" hidden></section>
+  <section id="sets" hidden></section>
+  <section id="results" hidden></section>
+  <section id="students" hidden></section>
+</main>
+
+<script type="module">
+/* ==========================================================================
+   DANE DOMYŚLNE – używane, dopóki w przeglądarce nie ma zapisanych pytań.
+   Wzory zapisujemy w LaTeX-u między znakami $ ... $.
+   ========================================================================== */
+const DEFAULT_QUESTIONS = [
+  { id: 'q1', type: 'single',
+    prompt: 'Ile wynosi pochodna funkcji $f(x)=x^2$?',
+    options: ['$x$', '$2x$', '$x^2$', '$2$'], correct: 1,
+    hints: ['Przypomnij sobie wzór na pochodną funkcji potęgowej $x^n$.',
+            'Wykładnik zjeżdża przed $x$, a nowy wykładnik jest o 1 mniejszy.'],
+    explanation: 'Z wzoru $(x^n)\'=n\\,x^{n-1}$ dla $n=2$ dostajemy $2x$.' },
+
+  { id: 'q2', type: 'multi',
+    prompt: 'Zaznacz wszystkie liczby pierwsze.',
+    options: ['$2$', '$9$', '$11$', '$15$'], correct: [0, 2],
+    explanation: '$9=3\\cdot3$ oraz $15=3\\cdot5$ są złożone.' },
+
+  { id: 'q3', type: 'short_text',
+    prompt: 'Jak nazywa się stolica Polski?',
+    accepted: ['Warszawa'],
+    explanation: 'Stolicą Polski jest Warszawa.' },
+
+  { id: 'q4', type: 'short_math',
+    prompt: 'Uprość wyrażenie: $(x+1)^2-(x-1)^2$',
+    expected: ['4x'], vars: ['x'], form: 'expanded',
+    hints: ['Rozwiń oba kwadraty ze wzoru $(a\\pm b)^2=a^2\\pm2ab+b^2$.',
+            'Po rozwinięciu odejmij wyrażenia i zredukuj wyrazy podobne.',
+            'Zostaje tylko wyraz z $2ab$, wystąpi dwa razy.'],
+    explanation: '$(x+1)^2-(x-1)^2 = 4x$.' },
+
+  { id: 'q5', type: 'long',
+    prompt: 'Wyjaśnij własnymi słowami, czym jest pochodna funkcji i do czego służy.',
+    model: 'Pochodna opisuje chwilową szybkość zmian funkcji w danym punkcie – geometrycznie jest to współczynnik kierunkowy stycznej do wykresu. Służy m.in. do badania monotoniczności i szukania ekstremów.',
+    explanation: '' },
+
+  { id: 'q6', type: 'geogebra',
+    prompt: 'Przesuń punkt $A$ w to miejsce, w którym prosta $y=2x+1$ przecina oś $Oy$.',
+    setup: ['ShowGrid(true)', 'f(x)=2x+1', 'A=(3,-2)', 'SetColor(A,"Red")', 'SetPointSize(A,6)',
+            'ZoomIn(-6,-6,6,6)'],
+    target: { object: 'A', x: 0, y: 1, tol: 0.25 },
+    explanation: 'Dla $x=0$ mamy $y=2\\cdot0+1=1$, czyli punkt $(0,\\,1)$.' },
+
+  // przykład podpowiedzi z mini-pytaniem (druga podpowiedź jest samym pytaniem)
+  { id: 'q7', type: 'short_math',
+    prompt: 'Wyznacz wzór funkcji kwadratowej $f(x)=2(x-1)^2-3$ w postaci ogólnej.',
+    expected: ['2x^2-4x-1'], vars: ['x'], form: 'expanded',
+    hints: [
+      'Skorzystaj ze wzoru skróconego mnożenia.',
+      { text: '', mini: { prompt: 'Z którego wzoru skróconego mnożenia należy skorzystać?',
+          options: ['$(a+b)^2=a^2+2ab+b^2$', '$(a-b)^2=a^2-2ab+b^2$', '$a^2-b^2=(a-b)(a+b)$'], correct: 1 } },
+      'Rozwiń $(x-1)^2$, pomnóż wynik przez 2 i odejmij 3.'
+    ],
+    explanation: '$2(x-1)^2-3=2(x^2-2x+1)-3=2x^2-4x-1$.' }
+];
+
+const SLIDES = [
+  { title: 'Czym jest pochodna?',
+    text: 'Pochodna funkcji w punkcie opisuje chwilową szybkość jej zmian:\n$$f\'(x_0)=\\lim_{h\\to0}\\frac{f(x_0+h)-f(x_0)}{h}$$' },
+  { title: 'Wpływ parametru $a$ na parabolę',
+    text: 'Przesuń suwak $a$ i zobacz, jak zmienia się wykres funkcji $f(x)=a\\,x^2$.',
+    ggb: { setup: ['a=1', 'f(x)=a*x^2', 'SetVisibleInView(a,1,true)', 'ShowGrid(true)', 'ZoomIn(-6,-4,6,8)'], height: 400 } },
+  { title: 'Podsumowanie',
+    text: 'Dla $a>0$ ramiona paraboli skierowane są w górę, dla $a<0$ w dół, a dla $a=0$ wykres jest prostą $y=0$.' }
+];
+
+const TYPE_LABEL = {
+  single: 'Jednokrotny wybór', multi: 'Wielokrotny wybór',
+  short_text: 'Krótka odpowiedź (tekst)', short_math: 'Krótka odpowiedź (wyrażenie)',
+  long: 'Długa odpowiedź', geogebra: 'Zadanie z GeoGebrą'
+};
+
+/* ==========================================================================
+   CZYSTA LOGIKA (bez DOM) – sprawdzanie odpowiedzi i model danych pytań
+   ========================================================================== */
+// <pure>
+const norm = s => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+const normLatex = s => String(s ?? '').replace(/\\left|\\right|\\,|\\;|\\!|\s+/g, '').replace(/\\cdot|\\times/g, '*');
+const sameSet = (a, b) => a.length === b.length && a.every(v => b.includes(v));
+const SAMPLES = [-2.3, -1.1, 0.7, 1.9, 3.3, 4.1];
+
+function numOf(e) {
+  if (e == null) return NaN;
+  if (typeof e === 'number') return e;
+  if (typeof e.re === 'number') {
+    const im = typeof e.im === 'number' ? e.im : 0;
+    return Math.abs(im) < 1e-9 ? e.re : NaN;
+  }
+  try { const v = Number(e.valueOf()); if (!Number.isNaN(v)) return v; } catch {}
+  return NaN;
+}
+
+function evalAt(ce, expr, vals) {
+  try { if (typeof expr.subs === 'function') return numOf(expr.subs(vals).N()); } catch {}
+  try { for (const k in vals) ce.assign(k, vals[k]); return numOf(expr.N()); } catch {}
+  return NaN;
+}
+
+// Równoważność dwóch wyrażeń: próbkowanie numeryczne w kilku punktach.
+function mathEqual(ce, a, b, vars = ['x']) {
+  if (!norm(a)) return false;
+  if (normLatex(a) === normLatex(b)) return true;
+  if (!ce) return false;
+  try {
+    const ea = ce.parse(a), eb = ce.parse(b);
+    if (ea.isValid === false || eb.isValid === false) return false;
+    let valid = 0;
+    for (const s of SAMPLES) {
+      const vals = {};
+      vars.forEach((v, i) => { vals[v] = s + i * 0.37; });
+      const x = evalAt(ce, ea, vals), y = evalAt(ce, eb, vals);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      if (Math.abs(x - y) > 1e-6 * (1 + Math.abs(x) + Math.abs(y))) return false;
+      valid++;
+    }
+    if (valid >= 3) return true;
+    try { return ea.isEqual(eb) === true; } catch {}
+  } catch (e) { console.warn('mathEqual:', e); }
+  return false;
+}
+
+// ---- wymagana postać wyniku (pytania z odpowiedzią matematyczną) ----
+const FORMS = {
+  any: 'Dowolna (matematycznie równoważna)',
+  expanded: 'Ogólna / rozwinięta (bez nawiasów)',
+  canonical: 'Kanoniczna: a(x−p)²+q',
+  factored: 'Iloczynowa (iloczyn czynników)',
+  exact: 'Dokładnie taki zapis jak wzorzec'
+};
+const FORM_NAME = { expanded: 'ogólna (rozwinięta)', canonical: 'kanoniczna', factored: 'iloczynowa', exact: 'taka jak wzorzec' };
+const FORM_HELP = {
+  any: 'Uznawana jest każda postać matematycznie równoważna ze wzorcem.',
+  expanded: 'Wynik musi być równoważny ze wzorcem, zapisany bez nawiasów i ze zredukowanymi wyrazami podobnymi, np. 2x²−4x−1.',
+  canonical: 'Wynik musi być równoważny ze wzorcem i mieć postać a(x−p)²+q: jeden nawias z jedną zmienną podniesiony do kwadratu plus ewentualnie stała.',
+  factored: 'Wynik musi być równoważny ze wzorcem i zapisany jako iloczyn czynników, np. 2(x−1)(x+3). Suma wyrazów na najwyższym poziomie nie jest uznawana.',
+  exact: 'Zapis ucznia musi być identyczny ze wzorcem (spacje i \\left \\right są ignorowane). Używaj tylko, gdy zależy Ci na konkretnym zapisie.'
+};
+
+const normForm = s => String(s ?? '').replace(/\\left|\\right/g, '').replace(/\\[,;! ]/g, '')
+  .replace(/\\cdot|\\times/g, '*').replace(/\s+/g, '');
+const stripCmd = t => t.replace(/\\[a-zA-Z]+/g, '');
+
+// Dzieli zapis na wyrazy względem + i − poza nawiasami (znaki przed wyrazami są pomijane).
+// Zwraca null, gdy nawiasy są niezgodne.
+function splitTerms(s) {
+  const terms = []; let depth = 0, cur = '';
+  for (const c of s) {
+    if (c === '(' || c === '{' || c === '[') depth++;
+    else if (c === ')' || c === '}' || c === ']') depth--;
+    if (depth < 0) return null;
+    if (depth === 0 && (c === '+' || c === '-')) {
+      if (cur !== '' && !/[\^*\/]$/.test(cur)) { terms.push(cur); cur = ''; }
+      else if (cur !== '') cur += c;
+      continue;
+    }
+    cur += c;
+  }
+  if (depth !== 0) return null;
+  if (cur !== '') terms.push(cur);
+  return terms;
+}
+
+// Czy zapis ucznia ma wymaganą postać (nie sprawdza równoważności – to robi mathEqual).
+function formOk(latex, form, vars) {
+  if (form === 'any') return true;
+  const V = (Array.isArray(vars) ? vars : []).filter(v => typeof v === 'string' && v.length === 1);
+  if (!V.length) V.push('x');
+  const s = normForm(latex);
+  if (!s) return false;
+  const terms = splitTerms(s);
+  if (!terms || !terms.length) return false;
+  const hasVar = t => { const c = stripCmd(t); return V.some(v => c.includes(v)); };
+  const varCount = t => [...stripCmd(t)].filter(c => V.includes(c)).length;
+  // wykładniki zmiennych w wyrazie jako napis; null, gdy wyraz nie jest jednomianem
+  const expOf = t => {
+    const c = stripCmd(t), e = V.map(() => 0);
+    for (let i = 0; i < c.length; i++) {
+      const k = V.indexOf(c[i]);
+      if (k < 0) continue;
+      if (i > 0 && c[i - 1] === '^') return null;
+      let ex = 1;
+      const m = c.slice(i + 1).match(/^\^(?:(\d+)|\{(\d+)\})/);
+      if (m) { ex = +(m[1] ?? m[2]); i += m[0].length; }
+      if (e[k] > 0) return null;
+      e[k] = ex;
+    }
+    return e.join(',');
+  };
+  switch (form) {
+    case 'expanded': {
+      if (/[()\[\]]/.test(s)) return false;
+      for (const m of s.matchAll(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g))
+        if (hasVar(m[2]) || (hasVar(m[1]) && /[+-]/.test(m[1]))) return false;
+      const sigs = terms.map(expOf);
+      return !sigs.includes(null) && new Set(sigs).size === sigs.length;
+    }
+    case 'canonical': {
+      const vt = terms.filter(hasVar), ct = terms.filter(t => !hasVar(t));
+      if (vt.length !== 1 || ct.length > 1) return false;
+      const t = vt[0];
+      let m = t.match(/^(.*)\((.+)\)\^(?:2|\{2\})$/);
+      if (m) return !hasVar(m[1]) && !/[\^()]/.test(m[2]) && varCount(m[2]) === 1;
+      m = t.match(/^(.*?)([a-zA-Z])\^(?:2|\{2\})$/);
+      return !!m && V.includes(m[2]) && !hasVar(m[1]);
+    }
+    case 'factored': {
+      if (terms.length !== 1) return false;
+      const t = terms[0];
+      let depth = 0, start = 0, groups = 0, varGroups = 0, bigExp = false, rest = '';
+      for (let i = 0; i < t.length; i++) {
+        const c = t[i];
+        if (c === '(') { if (depth === 0) start = i; depth++; }
+        else if (c === ')') {
+          depth--;
+          if (depth === 0) {
+            groups++; if (hasVar(t.slice(start + 1, i))) varGroups++;
+            const m = t.slice(i + 1).match(/^\^(?:(\d+)|\{(\d+)\})/);
+            if (m) { if (+(m[1] ?? m[2]) >= 2) bigExp = true; i += m[0].length; }
+          }
+        } else if (depth === 0) rest += c;
+      }
+      return varGroups >= 1 && (groups >= 2 || bigExp || stripCmd(rest).replace(/[*{}]/g, '') !== '');
+    }
+    default: return false;
+  }
+}
+
+// Ocena odpowiedzi matematycznej: równoważność ze wzorcem + wymagana postać.
+function gradeMath(ce, q, v) {
+  const form = q.form || 'any';
+  const vars = (Array.isArray(q.vars) && q.vars.length) ? q.vars : ['x'];
+  if (form === 'exact') return { status: q.expected.some(e => normLatex(v) === normLatex(e)) ? 'correct' : 'wrong' };
+  if (!q.expected.some(e => mathEqual(ce, v, e, vars))) return { status: 'wrong' };
+  if (form !== 'any' && !formOk(v, form, vars))
+    return { status: 'wrong', extra: `Wynik jest równoważny z poprawnym, ale nie jest zapisany w wymaganej postaci: ${FORM_NAME[form] || form}.` };
+  return { status: 'correct' };
+}
+
+// ---- model danych pytań (edytor) ----
+// identyfikator w formacie UUID v4 (taki sam format ma baza danych)
+function uuidv4() {
+  const c = globalThis.crypto;
+  if (c && c.randomUUID) return c.randomUUID();
+  const b = new Uint8Array(16);
+  if (c && c.getRandomValues) c.getRandomValues(b); else for (let i = 0; i < 16; i++) b[i] = Math.floor(Math.random() * 256);
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  const x = [...b].map(v => v.toString(16).padStart(2, '0')).join('');
+  return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}`;
+}
+const uid = uuidv4;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function blank(type) {
+  const base = { id: uid(), type, prompt: '', explanation: '', hints: [] };
+  switch (type) {
+    case 'single':     return { ...base, options: ['', ''], correct: null };
+    case 'multi':      return { ...base, options: ['', ''], correct: [] };
+    case 'short_text': return { ...base, accepted: [''] };
+    case 'short_math': return { ...base, expected: [''], vars: ['x'], form: 'any' };
+    case 'long':       return { ...base, model: '' };
+    case 'geogebra':   return { ...base, setup: ['A=(3,-2)'], target: { object: 'A', x: 0, y: 0, tol: 0.25 } };
+    default: throw new Error('Nieznany typ: ' + type);
+  }
+}
+
+const nonEmpty = a => (Array.isArray(a) ? a : []).map(s => String(s ?? '').trim()).filter(Boolean);
+
+// ---- podpowiedzi: { text, mini: { prompt, options[], correct } | null } ----
+const blankMini = () => ({ prompt: '', options: ['', ''], correct: null });
+const blankHint = () => ({ text: '', mini: null });
+// Ujednolica podpowiedź (także starą, zapisaną jako zwykły tekst).
+const normHint = x => {
+  if (typeof x === 'string') return { text: x, mini: null };
+  const m = x && typeof x === 'object' ? x.mini : null;
+  return {
+    text: String(x && x.text != null ? x.text : ''),
+    mini: m && typeof m === 'object' ? {
+      prompt: String(m.prompt ?? ''),
+      options: (Array.isArray(m.options) ? m.options : []).map(o => String(o ?? '')),
+      correct: Number.isInteger(m.correct) ? m.correct : null
+    } : null
+  };
+};
+// Podpowiedzi gotowe dla ucznia: bez pustych (brak tekstu i brak mini-pytania).
+const cleanHints = a => (Array.isArray(a) ? a : []).map(normHint)
+  .map(x => ({ ...x, text: x.text.trim() })).filter(x => x.text || x.mini);
+
+// Lista problemów uniemożliwiających użycie pytania w sprawdzianie.
+function problems(q) {
+  const p = [];
+  if (!String(q.prompt ?? '').trim()) p.push('Brak treści pytania.');
+  const opts = Array.isArray(q.options) ? q.options : [];
+  const optsOk = () => {
+    if (opts.length < 2) { p.push('Potrzebne co najmniej 2 odpowiedzi.'); return false; }
+    if (opts.some(o => !String(o ?? '').trim())) { p.push('Każda odpowiedź musi mieć treść.'); return false; }
+    return true;
+  };
+  switch (q.type) {
+    case 'single':
+      if (optsOk() && !(Number.isInteger(q.correct) && q.correct >= 0 && q.correct < opts.length))
+        p.push('Zaznacz poprawną odpowiedź.');
+      break;
+    case 'multi':
+      if (optsOk() && !(Array.isArray(q.correct) && q.correct.length > 0 &&
+          q.correct.every(c => Number.isInteger(c) && c >= 0 && c < opts.length)))
+        p.push('Zaznacz co najmniej jedną poprawną odpowiedź.');
+      break;
+    case 'short_text':
+      if (!nonEmpty(q.accepted).length) p.push('Podaj co najmniej jedną akceptowaną odpowiedź.');
+      break;
+    case 'short_math': {
+      const ex = nonEmpty(q.expected), f = q.form || 'any';
+      if (!ex.length) p.push('Podaj co najmniej jedną poprawną odpowiedź (LaTeX).');
+      if (!(f in FORMS)) p.push('Nieznana wymagana postać wyniku.');
+      else if (f !== 'any' && f !== 'exact')
+        ex.forEach(e => { if (!formOk(e, f, nonEmpty(q.vars))) p.push(`Wzorcowa odpowiedź „${e}” nie ma wymaganej postaci (${FORM_NAME[f]}).`); });
+      break;
+    }
+    case 'long':
+      break;
+    case 'geogebra': {
+      const t = q.target || {};
+      if (!nonEmpty(q.setup).length) p.push('Podaj polecenia GeoGebry przygotowujące aplet.');
+      if (!String(t.object ?? '').trim()) p.push('Podaj nazwę obiektu (punktu) do sprawdzenia.');
+      if (!Number.isFinite(t.x) || !Number.isFinite(t.y)) p.push('Podaj poprawne współrzędne punktu docelowego.');
+      if (!(Number.isFinite(t.tol) && t.tol > 0)) p.push('Tolerancja musi być liczbą dodatnią.');
+      break;
+    }
+    default: p.push('Nieznany typ pytania.');
+  }
+  // mini-pytania w podpowiedziach muszą być kompletne
+  (Array.isArray(q.hints) ? q.hints : []).forEach((hn, i) => {
+    const m = hn && typeof hn === 'object' ? hn.mini : null;
+    if (!m) return;
+    const pre = `Podpowiedź ${i + 1}, mini-pytanie: `;
+    const mo = Array.isArray(m.options) ? m.options : [];
+    if (!String(m.prompt ?? '').trim()) p.push(pre + 'brak treści.');
+    if (mo.length < 2 || mo.some(o => !String(o ?? '').trim())) p.push(pre + 'potrzebne co najmniej 2 niepuste odpowiedzi.');
+    else if (!(Number.isInteger(m.correct) && m.correct >= 0 && m.correct < mo.length)) p.push(pre + 'zaznacz poprawną odpowiedź.');
+  });
+  return p;
+}
+
+// Kopia pytania gotowa do użycia w sprawdzianie (bez pustych linii).
+function clean(q) {
+  const c = structuredClone(q);
+  if (c.accepted) c.accepted = nonEmpty(c.accepted);
+  if (c.expected) c.expected = nonEmpty(c.expected);
+  if (c.setup) c.setup = nonEmpty(c.setup);
+  c.hints = cleanHints(c.hints);
+  if (c.type === 'short_math') { c.vars = nonEmpty(c.vars); if (!c.vars.length) c.vars = ['x']; }
+  return c;
+}
+
+// Usunięcie odpowiedzi nr i z pytania single/multi z poprawieniem indeksów poprawnych.
+function removeOption(q, i) {
+  if (q.options.length <= 2) return false;
+  q.options.splice(i, 1);
+  if (q.type === 'multi') {
+    q.correct = q.correct.filter(c => c !== i).map(c => (c > i ? c - 1 : c));
+  } else {   // jednokrotny wybór (także mini-pytania w podpowiedziach, które nie mają pola type)
+    if (q.correct === i) q.correct = null;
+    else if (Number.isInteger(q.correct) && q.correct > i) q.correct -= 1;
+  }
+  return true;
+}
+
+// Przygotowanie pytania z importu: uzupełnia brakujące pola, pilnuje unikalnych id.
+function normalizeImported(raw, usedIds) {
+  if (!raw || typeof raw !== 'object' || !(raw.type in TYPE_LABEL)) return null;
+  const q = { ...blank(raw.type), ...raw };
+  q.hints = (Array.isArray(q.hints) ? q.hints : []).map(normHint);   // także stare podpowiedzi-teksty
+  // migracja starego pojedynczego pola „hint” (pierwsza wersja prototypu)
+  if (typeof q.hint === 'string' && q.hint.trim() && !q.hints.length) q.hints = [{ text: q.hint.trim(), mini: null }];
+  delete q.hint;
+  if (!q.id || usedIds.has(q.id)) q.id = uid();
+  usedIds.add(q.id);
+  return q;
+}
+// </pure>
+
+/* ==========================================================================
+   ZAPIS W PRZEGLĄDARCE
+   ========================================================================== */
+const STORE_KEY = 'quiz-prototyp:questions:v1';
+let storageOK = true;
+
+// domyślny zestaw przechodzi przez tę samą normalizację co zapis i import (uzupełnia brakujące pola)
+const defaultQuestions = () => {
+  const used = new Set();
+  return DEFAULT_QUESTIONS.map(q => normalizeImported(structuredClone(q), used));
+};
+
+function loadQuestions() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) {
+      const a = JSON.parse(raw);
+      if (Array.isArray(a)) {
+        const used = new Set();
+        return a.map(q => normalizeImported(q, used)).filter(Boolean);
+      }
+    }
+  } catch (e) { storageOK = false; console.warn('Odczyt z localStorage nie powiódł się:', e); }
+  return defaultQuestions();
+}
+function saveQuestions() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(questions)); return true; }
+  catch (e) { storageOK = false; console.warn('Zapis do localStorage nie powiódł się:', e); return false; }
+}
+
+/* ==========================================================================
+   KONFIGURACJA CHMURY (Supabase) I STAN APLIKACJI
+   ========================================================================== */
+const CLOUD = {
+  url: 'https://dtrfbfclbgbwzbcsefbl.supabase.co',
+  key: 'sb_publishable_PG6aoGjCE-eHDtYmtfQQ2A_kFYUexpH',   // klucz publiczny – bezpieczny w kodzie aplikacji
+  loginDomain: 'quiz.test',                                // login „ala” = adres ala@quiz.test
+  lib: 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.0/+esm'
+};
+let MODE = null;                     // 'local' (bez logowania) albo 'cloud' (po zalogowaniu)
+let sb = null;                       // klient Supabase
+let ME = null;                       // profil zalogowanego użytkownika
+let QCTX = { kind: 'preview' };      // kontekst sprawdzianu: podgląd/tryb lokalny albo podejście ucznia
+
+let questions = [];                  // wczytywane po wejściu w tryb lokalny lub po zalogowaniu nauczyciela
+let QUIZ = [];                       // pytania poprawne, używane przez sprawdzian
+const refreshQuiz = () => { QUIZ = questions.filter(q => !problems(q).length).map(clean); };
+let dirty = false;                   // zmiany w edytorze, których sprawdzian jeszcze nie widział
+
+/* ==========================================================================
+   BIBLIOTEKI (ładowane z CDN, z awaryjnym wariantem)
+   ========================================================================== */
+let CE = null, HAS_MATHFIELD = false;
+try { await import('https://esm.run/mathlive'); HAS_MATHFIELD = !!customElements.get('math-field'); }
+catch (e) { console.warn('MathLive niedostępny – używam zwykłego pola tekstowego.', e); }
+try { const m = await import('https://esm.run/@cortex-js/compute-engine'); CE = new m.ComputeEngine(); }
+catch (e) { console.warn('Compute Engine niedostępny – porównanie tylko dosłowne.', e); }
+
+/* ==========================================================================
+   POMOCNICZE (DOM)
+   ========================================================================== */
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function renderMath(el) {
+  if (window.renderMathInElement) {
+    window.renderMathInElement(el, {
+      delimiters: [{ left: '$$', right: '$$', display: true }, { left: '$', right: '$', display: false }],
+      throwOnError: false
+    });
+  }
+}
+const setRich = (el, text) => { el.innerHTML = esc(text).replace(/\n/g, '<br>'); renderMath(el); };
+const h = (tag, attrs = {}, ...kids) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v);
+  }
+  kids.flat().forEach(k => e.append(k));
+  return e;
+};
+const rich = (tag, text, cls) => {
+  const e = h(tag, cls ? { class: cls } : {});
+  setRich(e, text);
+  return e;
+};
+
+let ggbCounter = 0;
+function mountGGB(holder, setup, height, onApi) {
+  if (!holder.id) holder.id = 'ggb-' + (++ggbCounter);
+  const w = Math.max(280, Math.min(holder.parentElement?.clientWidth || 640, 720));
+  let tries = 0;
+  (function wait() {
+    if (window.GGBApplet) {
+      new window.GGBApplet({
+        appName: 'graphing', width: w, height,
+        showToolBar: false, showAlgebraInput: false, showMenuBar: false,
+        enableRightClick: false, showResetIcon: false,
+        appletOnLoad(api) { setup.forEach(c => api.evalCommand(c)); onApi?.(api); }
+      }, true).inject(holder.id);
+    } else if (tries++ < 100) setTimeout(wait, 100);
+    else holder.textContent = 'Nie udało się załadować GeoGebry (sprawdź połączenie z internetem).';
+  })();
+}
+
+/* ==========================================================================
+   TYPY PYTAŃ: build() rysuje pole odpowiedzi i zwraca funkcję odczytu,
+   grade() ocenia odpowiedź.
+   ========================================================================== */
+const TYPES = {
+  single: {
+    build(q, box) {
+      q.options.forEach((o, i) => box.append(h('label', { class: 'opt' },
+        h('input', { type: 'radio', name: q.id, value: String(i) }), rich('span', o))));
+      return () => { const c = box.querySelector('input:checked'); return c ? +c.value : null; };
+    },
+    grade: (q, v) => ({ status: v === q.correct ? 'correct' : 'wrong' })
+  },
+  multi: {
+    build(q, box) {
+      q.options.forEach((o, i) => box.append(h('label', { class: 'opt' },
+        h('input', { type: 'checkbox', value: String(i) }), rich('span', o))));
+      return () => [...box.querySelectorAll('input:checked')].map(c => +c.value);
+    },
+    grade: (q, v) => ({ status: sameSet(v, q.correct) ? 'correct' : 'wrong' })
+  },
+  short_text: {
+    build(q, box) {
+      const inp = h('input', { type: 'text', placeholder: 'Twoja odpowiedź', autocomplete: 'off' });
+      box.append(inp);
+      return () => inp.value;
+    },
+    grade: (q, v) => ({ status: q.accepted.map(norm).includes(norm(v)) ? 'correct' : 'wrong' })
+  },
+  short_math: {
+    build(q, box) {
+      let get;
+      if (HAS_MATHFIELD) {
+        const mf = document.createElement('math-field');
+        box.append(mf);
+        get = () => mf.value;
+      } else {
+        const inp = h('input', { type: 'text', placeholder: 'np. 4x lub \\frac{1}{2}' });
+        box.append(inp);
+        get = () => inp.value;
+      }
+      return get;
+    },
+    grade: (q, v) => gradeMath(CE, q, v)
+  },
+  long: {
+    build(q, box) {
+      const ta = h('textarea', { placeholder: 'Napisz swoją odpowiedź…' });
+      box.append(ta);
+      return () => ta.value;
+    },
+    grade: (q) => ({ status: 'manual', extra: q.model ? 'Wzorcowa odpowiedź: ' + q.model : '' })
+  },
+  geogebra: {
+    build(q, box) {
+      let api = null;
+      const holder = h('div', { class: 'ggb' });
+      box.append(holder);
+      mountGGB(holder, q.setup, 360, a => { api = a; });
+      return () => api ? { x: api.getXcoord(q.target.object), y: api.getYcoord(q.target.object) } : null;
+    },
+    grade(q, v) {
+      const t = q.target;
+      const ok = v && Math.hypot(v.x - t.x, v.y - t.y) <= t.tol;
+      return { status: ok ? 'correct' : 'wrong' };
+    }
+  }
+};
+
+/* ==========================================================================
+   SPRAWDZIAN
+   ========================================================================== */
+const quizEl = document.getElementById('quiz');
+// S.hints[i] = liczba podpowiedzi odsłoniętych przez ucznia przy pytaniu i
+// (docelowo ta informacja trafi razem z identyfikatorem ucznia do bazy danych)
+// S.mini[i][k] = { attempts, solved } dla mini-pytania w k-tej podpowiedzi pytania i
+const S = { i: 0, res: [], hints: [], mini: [] };
+const resetSession = (i = 0) => { S.i = i; S.res = []; S.hints = []; S.mini = []; };
+
+// Mini-pytanie jednokrotnego wyboru wewnątrz podpowiedzi: od razu mówi, czy odpowiedź jest dobra.
+function buildMini(mini, name, qi, hi) {
+  const rec = { attempts: 0, solved: false };
+  (S.mini[qi] ??= [])[hi] = rec;
+  const fbm = h('div', { class: 'minifb' });
+  const box = h('div', { class: 'mini' }, rich('div', mini.prompt, 'miniq'));
+  mini.options.forEach((o, i) => {
+    const inp = h('input', { type: 'radio', name, value: String(i) });
+    const lab = h('label', { class: 'opt' }, inp, rich('span', o));
+    inp.addEventListener('change', () => {
+      rec.attempts++;
+      if (i === mini.correct) {
+        rec.solved = true; lab.classList.add('ok');
+        box.querySelectorAll('input').forEach(d => { d.disabled = true; });
+        fbm.className = 'minifb ok'; fbm.textContent = '✓ Dobrze!';
+      } else {
+        lab.classList.add('bad'); inp.disabled = true;
+        fbm.className = 'minifb bad'; fbm.textContent = '✗ To nie ta odpowiedź – spróbuj jeszcze raz.';
+      }
+    });
+    box.append(lab);
+  });
+  box.append(fbm);
+  return box;
+}
+const LABEL = { correct: 'Poprawnie ✓', wrong: 'Niepoprawnie ✗', manual: 'Odpowiedź zapisana – do oceny przez nauczyciela' };
+
+function lock(body) {
+  body.querySelectorAll('input,textarea').forEach(d => { d.disabled = true; });
+  body.querySelectorAll('math-field').forEach(m => { m.readOnly = true; });
+}
+
+function showQuestion() {
+  quizEl.replaceChildren();
+  if (!QUIZ.length) {
+    quizEl.append(h('div', { class: 'card' },
+      h('p', {}, QCTX.kind === 'student'
+        ? 'Ten zestaw nie ma jeszcze pytań gotowych do rozwiązania.'
+        : 'Brak pytań gotowych do użycia. Dodaj je lub popraw w edytorze pytań.')));
+    return;
+  }
+  if (S.i >= QUIZ.length) return showSummary();
+  const q = QUIZ[S.i], T = TYPES[q.type];
+  const body = h('div', { class: 'body' });
+  const fb = h('div', { class: 'feedback', hidden: '' });
+  const btn = h('button', { class: 'primary' }, 'Sprawdź');
+
+  // podpowiedzi odsłaniane po jednej, w kolejności zapisanej w edytorze
+  const hintList = h('div', { class: 'hintlist' });
+  const hintBtn = h('button', { class: 'secondary', type: 'button' });
+  let used = 0;
+  S.hints[S.i] = 0;
+  const syncHintBtn = () => {
+    hintBtn.textContent = `💡 Pokaż podpowiedź ${used + 1} z ${q.hints.length}`;
+    hintBtn.hidden = used >= q.hints.length;
+  };
+  hintBtn.onclick = () => {
+    used++; S.hints[S.i] = used;
+    const hn = q.hints[used - 1];
+    const item = h('div', { class: 'hintitem' }, h('b', {}, `Podpowiedź ${used}` + (hn.text ? ': ' : '')));
+    if (hn.text) item.append(rich('span', hn.text));
+    if (hn.mini) item.append(buildMini(hn.mini, `${q.id}-h${used}`, S.i, used - 1));
+    hintList.append(item);
+    syncHintBtn();
+  };
+  syncHintBtn();
+  const hintArea = q.hints.length ? [hintList, h('div', { class: 'hintctl' }, hintBtn)] : [];
+
+  const card = h('div', { class: 'card' },
+    h('div', { class: 'meta' }, `Pytanie ${S.i + 1} z ${QUIZ.length}`),
+    rich('div', q.prompt, 'prompt'), body, ...hintArea, fb, btn);
+  quizEl.append(h('div', { class: 'bar' }, h('div', { style: `width:${(S.i / QUIZ.length) * 100}%` })), card);
+  const get = T.build(q, body);
+  const qStart = Date.now();
+  let checked = false;
+  btn.onclick = () => {
+    if (!checked) {
+      const value = get();
+      const r = T.grade(q, value);
+      S.res[S.i] = r.status; checked = true; lock(body); hintBtn.hidden = true;
+      hintList.querySelectorAll('input').forEach(d => { d.disabled = true; });
+      fb.className = 'feedback ' + r.status; fb.hidden = false;
+      fb.replaceChildren(h('strong', {}, LABEL[r.status]),
+        ...(q.explanation ? [rich('div', q.explanation)] : []),
+        ...(r.extra ? [rich('div', r.extra)] : []));
+      btn.textContent = S.i + 1 < QUIZ.length ? 'Dalej' : 'Zobacz wynik';
+      // zapis odpowiedzi (tylko w podejściu ucznia): wynik, podpowiedzi i mini-pytania
+      QCTX.onAnswer?.({
+        q, value, status: r.status, hintsUsed: used,
+        minis: (S.mini[S.i] || []).map((m, k) => (m ? { hint: k + 1, attempts: m.attempts, solved: m.solved } : null)).filter(Boolean),
+        spent: Math.round((Date.now() - qStart) / 1000)
+      });
+    } else { S.i++; showQuestion(); }
+  };
+}
+
+function showSummary() {
+  const graded = S.res.filter(r => r !== 'manual').length;
+  const ok = S.res.filter(r => r === 'correct').length;
+  const manual = S.res.length - graded;
+  const hintsUsed = S.hints.reduce((a, b) => a + (b || 0), 0);
+  const hintsAll = QUIZ.reduce((a, q) => a + q.hints.length, 0);
+  const rows = QUIZ.map((q, i) => h('div', { class: 'sumrow' },
+    h('span', { class: 't' }, `${i + 1}. ${plainTitle(q)}`),
+    h('span', { class: 'st ' + S.res[i] }, { correct: '✓', wrong: '✗', manual: 'do oceny' }[S.res[i]] || ''),
+    h('span', { class: 'hn2' }, q.hints.length
+      ? `💡 ${S.hints[i] || 0}/${q.hints.length}` + (q.hints.some(x => x.mini)
+        ? ` · mini ${(S.mini[i] || []).filter(m => m && m.solved).length}/${q.hints.filter(x => x.mini).length}` : '')
+      : '')));
+  const minis = S.mini.flat().filter(Boolean);
+
+  // w podejściu ucznia: zapis wyniku w bazie i powrót do listy zestawów
+  const student = QCTX.kind === 'student';
+  const saveNote = h('p', { class: 'hint' });
+  const saveWrap = h('div');
+  if (student) {
+    const doSave = () => {
+      saveWrap.replaceChildren(h('p', { class: 'hint' }, 'Zapisywanie wyniku…'));
+      QCTX.onFinish().then(res => {
+        if (res.ok) { saveWrap.replaceChildren(h('div', { class: 'note good' }, 'Wynik został zapisany.')); return; }
+        saveWrap.replaceChildren(h('div', { class: 'note bad' }, 'Nie udało się zapisać wyniku: ' + res.error + ' '),
+          h('button', { class: 'secondary small', type: 'button', onclick: () => { QCTX.resultPromise = null; doSave(); } }, 'Spróbuj ponownie'));
+      });
+    };
+    doSave();
+  }
+  quizEl.append(h('div', { class: 'card' },
+    h('h2', { style: 'margin-top:0' }, 'Wynik'),
+    h('div', { class: 'score' }, `${ok} / ${graded}`),
+    h('p', {}, manual ? `Pytania otwarte czekające na ocenę nauczyciela: ${manual}.` : 'Wszystkie pytania zostały ocenione automatycznie.'),
+    ...(hintsAll ? [h('p', {}, `Wykorzystane podpowiedzi: ${hintsUsed} z ${hintsAll}.`)] : []),
+    ...(minis.length ? [h('p', {}, `Mini-pytania w podpowiedziach: rozwiązane ${minis.filter(m => m.solved).length} z ${minis.length} odsłoniętych, łącznie prób: ${minis.reduce((a, m) => a + m.attempts, 0)}.`)] : []),
+    h('div', { style: 'margin-bottom:16px' }, rows),
+    ...(student ? [saveWrap] : []),
+    student
+      ? h('button', { class: 'primary', onclick: () => QCTX.onExit() }, 'Wróć do listy zestawów')
+      : h('button', { class: 'primary', onclick: () => { resetSession(); showQuestion(); } }, 'Zacznij od nowa')));
+}
+
+/* ==========================================================================
+   PREZENTACJA
+   ========================================================================== */
+const slidesEl = document.getElementById('slides');
+let si = 0;
+function showSlide() {
+  const s = SLIDES[si];
+  const card = h('div', { class: 'card slide' }, rich('h2', s.title), rich('div', s.text, 'prompt'));
+  slidesEl.replaceChildren(card);
+  if (s.ggb) {
+    const holder = h('div', { class: 'ggb' });
+    card.append(holder);
+    mountGGB(holder, s.ggb.setup, s.ggb.height || 380);
+  }
+  const prev = h('button', { class: 'secondary', onclick: () => { si--; showSlide(); } }, '← Wstecz');
+  const next = h('button', { class: 'primary', onclick: () => { si++; showSlide(); } }, 'Dalej →');
+  prev.disabled = si === 0; next.disabled = si === SLIDES.length - 1;
+  slidesEl.append(h('div', { class: 'nav' }, prev, h('span', { class: 'meta' }, `${si + 1} / ${SLIDES.length}`), next));
+}
+document.addEventListener('keydown', e => {
+  if (slidesEl.hidden || e.target.closest('input,textarea,math-field')) return;
+  if (e.key === 'ArrowRight' && si < SLIDES.length - 1) { si++; showSlide(); }
+  if (e.key === 'ArrowLeft' && si > 0) { si--; showSlide(); }
+});
+
+/* ==========================================================================
+   EDYTOR TREŚCI
+   ========================================================================== */
+const editorEl = document.getElementById('editor');
+let sel = null;
+let editorBuilt = false;
+let statusEl, listEl, formEl;
+
+const field = (label, el, help) => h('div', { class: 'field' }, h('label', {}, label), el, help ? h('div', { class: 'hint' }, help) : '');
+const textInput = (value, onInput, placeholder = '') => {
+  const i = h('input', { type: 'text', placeholder }); i.value = value ?? '';
+  i.addEventListener('input', () => onInput(i.value)); return i;
+};
+const textArea = (value, onInput, rows = 3, placeholder = '') => {
+  const t = h('textarea', { rows: String(rows), placeholder }); t.value = value ?? '';
+  t.addEventListener('input', () => onInput(t.value)); return t;
+};
+const plainTitle = q => (String(q.prompt || '').replace(/\$+/g, '').replace(/\s+/g, ' ').trim() || '(pusta treść)');
+
+// Stan zapisu pokazywany w pasku narzędzi edytora (ok / saving / error).
+let saveState = { kind: 'idle', text: '' };
+function setSaveStatus(kind, text) {
+  saveState = { kind, text };
+  if (!statusEl) return;
+  statusEl.className = 'status' + (kind === 'error' ? ' bad' : '');
+  statusEl.replaceChildren(text);
+  if (kind === 'error' && MODE === 'cloud')
+    statusEl.append(' ', h('button', { class: 'secondary small', type: 'button', onclick: () => flushSync() }, 'Ponów'));
+}
+
+function commit() {
+  if (MODE === 'cloud') {
+    // w bazie identyfikatory muszą być w formacie UUID (np. po imporcie starego pliku)
+    questions.forEach(q => { if (!UUID_RE.test(q.id)) { const old = q.id; q.id = uuidv4(); if (sel === old) sel = q.id; } });
+    scheduleSync();
+  } else {
+    const saved = saveQuestions();
+    setSaveStatus(saved ? 'ok' : 'error', saved
+      ? 'Zapisano w przeglądarce (' + new Date().toLocaleTimeString('pl-PL') + ')'
+      : 'Uwaga: zapis w przeglądarce niedostępny – korzystaj z eksportu do pliku.');
+  }
+  dirty = true;
+  refreshQuiz();
+  renderList();
+}
+
+function renderList() {
+  if (!listEl) return;
+  listEl.replaceChildren();
+  if (!questions.length) listEl.append(h('p', { class: 'hint' }, 'Brak pytań. Dodaj pierwsze przyciskiem powyżej.'));
+  questions.forEach((q, idx) => {
+    const bad = problems(q).length > 0;
+    const move = (d) => (ev) => {
+      ev.stopPropagation();
+      const j = idx + d; if (j < 0 || j >= questions.length) return;
+      [questions[idx], questions[j]] = [questions[j], questions[idx]]; commit();
+    };
+    const up = h('button', { class: 'secondary small', type: 'button', title: 'W górę', onclick: move(-1) }, '↑');
+    const down = h('button', { class: 'secondary small', type: 'button', title: 'W dół', onclick: move(1) }, '↓');
+    up.disabled = idx === 0; down.disabled = idx === questions.length - 1;
+    const del = h('button', { class: 'secondary small danger', type: 'button', title: 'Usuń pytanie', onclick: ev => {
+      ev.stopPropagation();
+      if (!confirm(MODE === 'cloud' ? 'Usunąć to pytanie z bazy? Zniknie też ze wszystkich zestawów (zapisane wyniki uczniów zostaną).' : 'Usunąć to pytanie?')) return;
+      questions.splice(idx, 1);
+      if (sel === q.id) sel = questions[Math.min(idx, questions.length - 1)]?.id ?? null;
+      commit(); renderForm();
+    } }, '✕');
+    listEl.append(h('div', { class: 'qrow' + (q.id === sel ? ' sel' : ''), onclick: () => { sel = q.id; renderList(); renderForm(); } },
+      h('div', { class: 'warn', title: bad ? 'Pytanie wymaga poprawek' : '' }, bad ? '⚠' : ''),
+      h('div', { class: 't' }, h('b', {}, `${idx + 1}. ${plainTitle(q)}`), h('span', {}, TYPE_LABEL[q.type])),
+      up, down, del));
+  });
+}
+
+function previewBox(text) { const p = h('div', { class: 'preview' }); setRich(p, text); return p; }
+
+function optionsEditor(q) {
+  const wrap = h('div');
+  const draw = () => {
+    wrap.replaceChildren();
+    q.options.forEach((o, i) => {
+      const mark = h('input', { type: q.type === 'single' ? 'radio' : 'checkbox', name: 'correct', title: 'Poprawna odpowiedź' });
+      mark.checked = q.type === 'single' ? q.correct === i : q.correct.includes(i);
+      mark.addEventListener('change', () => {
+        if (q.type === 'single') q.correct = i;
+        else q.correct = mark.checked ? [...q.correct, i].sort((a, b) => a - b) : q.correct.filter(c => c !== i);
+        commit(); refreshProblems();
+      });
+      const inp = textInput(o, v => { q.options[i] = v; commit(); refreshProblems(); }, `Odpowiedź ${i + 1} (wzory w $…$)`);
+      const del = h('button', { class: 'secondary small danger', type: 'button', title: 'Usuń odpowiedź', onclick: () => {
+        if (removeOption(q, i)) { commit(); draw(); refreshProblems(); }
+      } }, '✕');
+      del.disabled = q.options.length <= 2;
+      wrap.append(h('div', { class: 'optrow' }, mark, inp, del));
+    });
+    wrap.append(h('button', { class: 'secondary small', type: 'button', onclick: () => { q.options.push(''); commit(); draw(); refreshProblems(); } }, '+ Dodaj odpowiedź'));
+    wrap.append(h('div', { class: 'hint' }, q.type === 'single'
+      ? 'Zaznacz kółkiem jedną poprawną odpowiedź.' : 'Zaznacz kwadratem wszystkie poprawne odpowiedzi.'));
+  };
+  draw();
+  return wrap;
+}
+
+function mathPreviewLines(text) {
+  const box = h('div', { class: 'preview' });
+  nonEmpty(text.split('\n')).forEach(line => {
+    const row = h('div');
+    if (window.katex) { try { window.katex.render(line, row, { throwOnError: false }); } catch { row.textContent = line; } }
+    else row.textContent = line;
+    box.append(row);
+  });
+  return box;
+}
+
+function ggbEditor(q) {
+  const wrap = h('div');
+  const refs = {};
+  wrap.append(field('Polecenia GeoGebry (jedno w linii)',
+    textArea(q.setup.join('\n'), v => { q.setup = v.split('\n'); commit(); refreshProblems(); }, 6, 'f(x)=2x+1\nA=(3,-2)'),
+    'Polecenia wykonują się w podanej kolejności po załadowaniu apletu, np. definicja funkcji i punkt początkowy.'));
+  const num = (key, label) => {
+    const i = h('input', { type: 'number', step: 'any' });
+    i.value = Number.isFinite(q.target[key]) ? q.target[key] : '';
+    i.addEventListener('input', () => { q.target[key] = i.value === '' ? NaN : Number(i.value); commit(); refreshProblems(); });
+    refs[key] = i; return field(label, i);
+  };
+  wrap.append(field('Sprawdzany obiekt (nazwa punktu)',
+    textInput(q.target.object, v => { q.target.object = v.trim(); commit(); refreshProblems(); }, 'np. A')));
+  wrap.append(h('div', { class: 'numrow' }, num('x', 'Poprawne x'), num('y', 'Poprawne y'), num('tol', 'Tolerancja')));
+
+  const holder = h('div', { class: 'ggb' });
+  let api = null;
+  const show = h('button', { class: 'secondary', type: 'button', onclick: () => {
+    holder.replaceChildren(); api = null;
+    const inner = h('div'); holder.append(inner);
+    mountGGB(inner, clean(q).setup, 340, a => { api = a; });
+  } }, 'Pokaż aplet / odśwież');
+  const grab = h('button', { class: 'secondary', type: 'button', onclick: () => {
+    if (!api) { alert('Najpierw pokaż aplet.'); return; }
+    const o = q.target.object;
+    try {
+      q.target.x = +api.getXcoord(o).toFixed(2); q.target.y = +api.getYcoord(o).toFixed(2);
+      refs.x.value = q.target.x; refs.y.value = q.target.y; commit(); refreshProblems();
+    } catch { alert('Nie znaleziono obiektu „' + o + '” w aplecie.'); }
+  } }, 'Ustaw poprawne x, y z bieżącego położenia punktu');
+  wrap.append(h('div', { class: 'actions' }, show, grab), holder);
+  return wrap;
+}
+
+// Edytor mini-pytania jednokrotnego wyboru (używany wewnątrz podpowiedzi).
+function miniEditor(mini, changed) {
+  const wrap = h('div');
+  const name = 'mc' + uid();
+  const draw = () => {
+    wrap.replaceChildren();
+    const pv = previewBox(mini.prompt);
+    wrap.append(field('Treść mini-pytania',
+      textArea(mini.prompt, v => { mini.prompt = v; setRich(pv, v); changed(); }, 2, 'np. Z którego wzoru należy skorzystać?')), pv);
+    mini.options.forEach((o, i) => {
+      const mark = h('input', { type: 'radio', name, title: 'Poprawna odpowiedź' });
+      mark.checked = mini.correct === i;
+      mark.addEventListener('change', () => { mini.correct = i; changed(); });
+      const inp = textInput(o, v => { mini.options[i] = v; changed(); }, `Odpowiedź ${i + 1} (wzory w $…$)`);
+      const del = h('button', { class: 'secondary small danger', type: 'button', title: 'Usuń odpowiedź', onclick: () => {
+        if (removeOption(mini, i)) { changed(); draw(); }
+      } }, '✕');
+      del.disabled = mini.options.length <= 2;
+      wrap.append(h('div', { class: 'optrow' }, mark, inp, del));
+    });
+    wrap.append(h('button', { class: 'secondary small', type: 'button', onclick: () => { mini.options.push(''); changed(); draw(); } }, '+ Dodaj odpowiedź'));
+    wrap.append(h('div', { class: 'hint' }, 'Zaznacz kółkiem jedną poprawną odpowiedź.'));
+  };
+  draw();
+  return wrap;
+}
+
+function hintsEditor(q) {
+  const wrap = h('div');
+  const draw = () => {
+    wrap.replaceChildren();
+    q.hints.forEach((hn, i) => {
+      const pv = previewBox(hn.text);
+      const ta = textArea(hn.text, v => { hn.text = v; setRich(pv, v); commit(); }, 2,
+        `Podpowiedź ${i + 1} (wzory w $…$) – może być pusta, jeśli podpowiedzią jest samo mini-pytanie`);
+      const move = d => () => {
+        const j = i + d; if (j < 0 || j >= q.hints.length) return;
+        [q.hints[i], q.hints[j]] = [q.hints[j], q.hints[i]]; commit(); draw();
+      };
+      const up = h('button', { class: 'secondary small', type: 'button', title: 'Wcześniej', onclick: move(-1) }, '↑');
+      const down = h('button', { class: 'secondary small', type: 'button', title: 'Później', onclick: move(1) }, '↓');
+      up.disabled = i === 0; down.disabled = i === q.hints.length - 1;
+      const del = h('button', { class: 'secondary small danger', type: 'button', title: 'Usuń podpowiedź', onclick: () => {
+        q.hints.splice(i, 1); commit(); draw(); refreshProblems();
+      } }, '✕');
+
+      const body = h('div', {}, ta, pv);
+      if (hn.mini) {
+        body.append(h('div', { class: 'mini-box' },
+          h('div', { class: 'meta' }, 'Mini-pytanie (jednokrotny wybór) – uczeń odpowiada na nie w ramach tej podpowiedzi'),
+          miniEditor(hn.mini, () => { commit(); refreshProblems(); }),
+          h('div', { class: 'actions' }, h('button', { class: 'secondary small danger', type: 'button', onclick: () => {
+            hn.mini = null; commit(); draw(); refreshProblems();
+          } }, 'Usuń mini-pytanie'))));
+      } else {
+        body.append(h('div', { class: 'actions' }, h('button', { class: 'secondary small', type: 'button', onclick: () => {
+          hn.mini = blankMini(); commit(); draw(); refreshProblems();
+        } }, '+ Dodaj mini-pytanie')));
+      }
+      wrap.append(h('div', { class: 'hintrow' }, h('div', { class: 'hn' }, `${i + 1}.`),
+        body, h('div', { class: 'hbtns' }, up, down, del)));
+    });
+    wrap.append(h('button', { class: 'secondary small', type: 'button', onclick: () => { q.hints.push(blankHint()); commit(); draw(); } }, '+ Dodaj podpowiedź'));
+  };
+  draw();
+  return wrap;
+}
+
+let problemsEl;
+function refreshProblems() {
+  const q = questions.find(x => x.id === sel);
+  if (!problemsEl || !q) return;
+  const p = problems(q);
+  problemsEl.replaceChildren(...p.map(t => h('li', {}, t)));
+  problemsEl.hidden = !p.length;
+}
+
+function renderForm() {
+  formEl.replaceChildren();
+  const q = questions.find(x => x.id === sel);
+  if (!q) { formEl.append(h('div', { class: 'card' }, h('p', { class: 'hint' }, 'Wybierz pytanie z listy albo dodaj nowe.'))); return; }
+
+  const card = h('div', { class: 'card' });
+  problemsEl = h('ul', { class: 'problems' });
+  card.append(problemsEl);
+
+  const typeSel = h('select');
+  Object.entries(TYPE_LABEL).forEach(([k, v]) => typeSel.append(h('option', { value: k }, v)));
+  typeSel.value = q.type;
+  typeSel.onchange = () => {
+    if (!confirm('Zmiana typu usunie dane odpowiedzi tego pytania (treść, podpowiedzi i wyjaśnienie zostaną). Kontynuować?')) { typeSel.value = q.type; return; }
+    const n = { ...blank(typeSel.value), id: q.id, prompt: q.prompt, explanation: q.explanation, hints: q.hints };
+    questions[questions.indexOf(q)] = n; commit(); renderForm();
+  };
+  card.append(field('Typ pytania', typeSel));
+
+  const promptPv = previewBox(q.prompt);
+  card.append(field('Treść pytania', textArea(q.prompt, v => { q.prompt = v; setRich(promptPv, v); commit(); refreshProblems(); }, 3),
+    'Wzory wpisuj w LaTeX-u między znakami $, np. $x^2+1$. Poniżej widać podgląd.'), promptPv);
+
+  switch (q.type) {
+    case 'single': case 'multi':
+      card.append(field('Odpowiedzi', optionsEditor(q))); break;
+    case 'short_text':
+      card.append(field('Akceptowane odpowiedzi (jedna w linii)',
+        textArea(q.accepted.join('\n'), v => { q.accepted = v.split('\n'); commit(); refreshProblems(); }, 3),
+        'Wielkość liter i nadmiarowe spacje są ignorowane.')); break;
+    case 'short_math': {
+      let pv = mathPreviewLines(q.expected.join('\n'));
+      card.append(field('Poprawne odpowiedzi – LaTeX (jedna w linii)',
+        textArea(q.expected.join('\n'), v => {
+          q.expected = v.split('\n'); const n = mathPreviewLines(v); pv.replaceWith(n); pv = n; commit(); refreshProblems();
+        }, 3, '4x'),
+        'Odpowiedź ucznia jest uznawana, gdy jest matematycznie równoważna którejś z nich (i ma wymaganą postać).'), pv);
+
+      const formHelp = h('div', { class: 'hint' });
+      const formSel = h('select');
+      Object.entries(FORMS).forEach(([k, v]) => formSel.append(h('option', { value: k }, v)));
+      formSel.value = (q.form in FORMS) ? q.form : 'any';
+      const syncHelp = () => { formHelp.textContent = FORM_HELP[formSel.value] || ''; };
+      formSel.onchange = () => { q.form = formSel.value; syncHelp(); commit(); refreshProblems(); };
+      syncHelp();
+      const formField = field('Wymagana postać wyniku', formSel);
+      formField.append(formHelp);
+      card.append(formField);
+
+      card.append(field('Zmienne (po przecinku)',
+        textInput((q.vars || []).join(', '), v => { q.vars = v.split(','); commit(); refreshProblems(); }, 'x'),
+        'Zmienne występujące w wyrażeniach – służą do sprawdzania równoważności.'));
+      break;
+    }
+    case 'long':
+      card.append(field('Wzorcowa odpowiedź (pokazywana po odpowiedzi ucznia)',
+        textArea(q.model, v => { q.model = v; commit(); }, 4),
+        'Pytania otwarte nie są oceniane automatycznie – nauczyciel ocenia je ręcznie.')); break;
+    case 'geogebra':
+      card.append(ggbEditor(q)); break;
+  }
+
+  card.append(field('Podpowiedzi (opcjonalnie)', hintsEditor(q),
+    'Uczeń odsłania je po jednej, w tej kolejności – zacznij od najogólniejszej. Puste podpowiedzi są pomijane.'));
+
+  const exPv = previewBox(q.explanation);
+  card.append(field('Wyjaśnienie po odpowiedzi (opcjonalnie)',
+    textArea(q.explanation, v => { q.explanation = v; setRich(exPv, v); commit(); }, 3)), exPv);
+
+  card.append(h('div', { class: 'actions' },
+    h('button', { class: 'primary', type: 'button', onclick: () => tryQuestion(q) }, 'Wypróbuj w sprawdzianie')));
+  formEl.append(card);
+  refreshProblems();
+}
+
+function tryQuestion(q) {
+  refreshQuiz();
+  const k = QUIZ.findIndex(x => x.id === q.id);
+  if (k < 0) { alert('Najpierw popraw błędy w pytaniu (⚠ na liście).'); return; }
+  QCTX = { kind: 'preview' };
+  resetSession(k); dirty = false;
+  activateTab('quiz');
+  showQuestion();
+}
+
+function exportJSON() {
+  const blob = new Blob([JSON.stringify({ version: 1, questions }, null, 2)], { type: 'application/json' });
+  const a = h('a', { href: URL.createObjectURL(blob), download: 'pytania.json' });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function importJSON(file) {
+  const fr = new FileReader();
+  fr.onload = () => {
+    try {
+      const data = JSON.parse(fr.result);
+      const arr = Array.isArray(data) ? data : data.questions;
+      if (!Array.isArray(arr)) throw new Error('Brak listy pytań.');
+      // w bazie import tylko DODAJE pytania (nie kasuje istniejących i nie rusza zestawów)
+      const used = new Set(MODE === 'cloud' ? questions.map(q => q.id) : []);
+      const imported = arr.map(q => normalizeImported(q, used)).filter(Boolean);
+      if (!imported.length) throw new Error('Plik nie zawiera poprawnych pytań.');
+      if (MODE === 'cloud') {
+        if (!confirm(`Dodać ${imported.length} pytań z pliku do bazy?`)) return;
+        questions.push(...imported); sel = imported[0].id;
+      } else {
+        if (!confirm(`Zastąpić obecne pytania (${questions.length}) zaimportowanymi (${imported.length})?`)) return;
+        questions = imported; sel = questions[0].id;
+      }
+      commit(); renderForm();
+    } catch (e) { alert('Nie udało się zaimportować pliku: ' + e.message); }
+  };
+  fr.readAsText(file);
+}
+
+function buildEditor() {
+  const addType = h('select');
+  Object.entries(TYPE_LABEL).forEach(([k, v]) => addType.append(h('option', { value: k }, v)));
+  const fileIn = h('input', { type: 'file', accept: 'application/json,.json', hidden: '' });
+  fileIn.addEventListener('change', () => { if (fileIn.files[0]) importJSON(fileIn.files[0]); fileIn.value = ''; });
+  statusEl = h('span', { class: 'status' });
+  if (saveState.kind === 'idle') {
+    setSaveStatus(storageOK || MODE === 'cloud' ? 'ok' : 'error',
+      MODE === 'cloud' ? 'Zmiany zapisują się automatycznie w bazie.'
+        : (storageOK ? 'Zmiany zapisują się automatycznie w tej przeglądarce.' : 'Uwaga: zapis w przeglądarce niedostępny.'));
+  } else setSaveStatus(saveState.kind, saveState.text);
+  const toolbar = h('div', { class: 'toolbar' },
+    addType,
+    h('button', { class: 'primary', type: 'button', onclick: () => {
+      const q = blank(addType.value); questions.push(q); sel = q.id; commit(); renderForm();
+    } }, '+ Dodaj pytanie'),
+    h('button', { class: 'secondary', type: 'button', onclick: exportJSON }, 'Eksportuj JSON'),
+    h('button', { class: 'secondary', type: 'button', onclick: () => fileIn.click() }, 'Importuj JSON'),
+    MODE === 'cloud'
+      ? h('button', { class: 'secondary', type: 'button', onclick: () => {
+          if (!confirm('Dodać do bazy przykładowe pytania?')) return;
+          const examples = defaultQuestions().map(q => ({ ...q, id: uuidv4() }));
+          questions.push(...examples); sel = examples[0].id; commit(); renderForm();
+        } }, 'Dodaj przykładowe pytania')
+      : h('button', { class: 'secondary danger', type: 'button', onclick: () => {
+          if (!confirm('Przywrócić domyślny zestaw pytań? Twoje zmiany zostaną usunięte (zrób wcześniej eksport).')) return;
+          questions = defaultQuestions(); sel = questions[0].id; commit(); renderForm();
+        } }, 'Przywróć domyślne'),
+    fileIn, statusEl);
+  listEl = h('div', { class: 'qlist' });
+  formEl = h('div');
+  editorEl.replaceChildren(toolbar, h('div', { class: 'editor' }, listEl, formEl));
+  editorBuilt = true;
+}
+
+/* ==========================================================================
+   CHMURA (Supabase): zapis pytań w bazie
+   ========================================================================== */
+const rowOf = (q, i) => { const { id, type, ...content } = q; return { id, type, position: i, content }; };
+const synced = new Map();            // id pytania -> JSON ostatnio zapisanego wiersza
+let syncTimer = null, syncActive = 0, syncPromise = Promise.resolve();
+
+async function loadCloudQuestions() {
+  const { data, error } = await sb.from('questions').select('id,type,position,content,created_at')
+    .order('position', { ascending: true }).order('created_at', { ascending: true });
+  if (error) throw error;
+  const used = new Set();
+  questions = (data || []).map(r => normalizeImported({ ...(r.content || {}), id: r.id, type: r.type }, used)).filter(Boolean);
+  synced.clear();
+  questions.forEach((q, i) => synced.set(q.id, JSON.stringify(rowOf(q, i))));
+}
+
+// Zapis z opóźnieniem: zmiany z kilku sekund trafiają do bazy jednym żądaniem.
+function scheduleSync() {
+  if (MODE !== 'cloud') return;
+  clearTimeout(syncTimer);
+  setSaveStatus('saving', 'Zapisywanie…');
+  syncTimer = setTimeout(() => { syncTimer = null; runSync(); }, 700);
+}
+function runSync() { syncPromise = syncPromise.then(doSync); return syncPromise; }
+function flushSync() { if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; } return runSync(); }
+
+// Porównuje aktualne pytania z tym, co ostatnio zapisano: wysyła zmienione, usuwa skasowane.
+async function doSync() {
+  if (MODE !== 'cloud' || !sb) return true;
+  syncActive++;
+  try {
+    const ids = questions.map(q => q.id);
+    const snaps = questions.map((q, i) => JSON.stringify(rowOf(q, i)));   // migawka w chwili zapisu
+    const changed = ids.map((id, i) => [id, snaps[i]]).filter(([id, json]) => synced.get(id) !== json);
+    const present = new Set(ids);
+    const removed = [...synced.keys()].filter(id => !present.has(id));
+    if (changed.length) {
+      const { error } = await sb.from('questions').upsert(changed.map(([, json]) => JSON.parse(json)), { onConflict: 'id' });
+      if (error) throw error;
+      changed.forEach(([id, json]) => synced.set(id, json));
+    }
+    if (removed.length) {
+      const { error } = await sb.from('questions').delete().in('id', removed);
+      if (error) throw error;
+      removed.forEach(id => synced.delete(id));
+    }
+    if (!syncTimer) setSaveStatus('ok', 'Zapisano w bazie (' + new Date().toLocaleTimeString('pl-PL') + ')');
+    return true;
+  } catch (e) {
+    console.warn('Zapis do bazy nie powiódł się:', e);
+    setSaveStatus('error', 'Nie udało się zapisać w bazie: ' + friendlyError(e));
+    return false;
+  } finally { syncActive--; }
+}
+window.addEventListener('beforeunload', ev => { if (syncTimer || syncActive) { ev.preventDefault(); ev.returnValue = ''; } });
+
+/* ==========================================================================
+   POMOCNICZE DLA WIDOKÓW CHMURY
+   ========================================================================== */
+const navEl = document.getElementById('nav');
+const userEl = document.getElementById('userbox');
+const mainEl = document.querySelector('main');
+const loginEl = document.getElementById('login');
+const homeEl = document.getElementById('home');
+const setsEl = document.getElementById('sets');
+const resultsEl = document.getElementById('results');
+const studentsEl = document.getElementById('students');
+
+const ROLE_LABEL = { teacher: 'nauczyciel', student: 'uczeń' };
+const fmtDT = s => (s ? new Date(s).toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' }) : '—');
+const toNum = v => Number(v) || 0;
+const loadingBox = () => h('p', { class: 'hint' }, 'Ładowanie…');
+
+function friendlyError(e) {
+  const m = String((e && (e.message || e.details)) || e || 'Nieznany błąd');
+  const code = String((e && e.code) || '');
+  if (/Could not find the table|does not exist|PGRST205/i.test(m) || code === '42P01')
+    return 'Brak tabel w bazie – wgraj schemat (plik supabase-schema.sql) w SQL Editor.';
+  if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return 'Brak połączenia z serwerem. Sprawdź internet i spróbuj ponownie.';
+  if (/row-level security|permission denied/i.test(m) || code === '42501') return 'Brak uprawnień do tej operacji.';
+  return m;
+}
+const errBox = e => h('div', { class: 'note bad' }, friendlyError(e));
+
+function table(headers, rows) {
+  return h('div', { class: 'tablewrap' }, h('table', { class: 'tbl' },
+    h('thead', {}, h('tr', {}, headers.map(x => h('th', {}, x)))),
+    h('tbody', {}, rows)));
+}
+
+/* ==========================================================================
+   WIDOKI I NAWIGACJA
+   ========================================================================== */
+let slidesShown = false;
+const VIEWS = {
+  login: { el: loginEl },
+  home: { el: homeEl, show: showHome },
+  quiz: { el: quizEl, show() { if (QCTX.kind === 'preview' && dirty) { dirty = false; resetSession(); refreshQuiz(); showQuestion(); } } },
+  slides: { el: slidesEl, show() { if (!slidesShown) { slidesShown = true; showSlide(); } } },
+  editor: { el: editorEl, wide: true, show() { if (!editorBuilt) buildEditor(); renderList(); renderForm(); } },
+  sets: { el: setsEl, wide: true, show: showSets },
+  results: { el: resultsEl, wide: true, show: showResults },
+  students: { el: studentsEl, wide: true, show: showStudents }
+};
+
+function activateTab(t) {
+  const v = VIEWS[t]; if (!v) return;
+  document.querySelectorAll('#nav button').forEach(x => x.classList.toggle('active', x.dataset.tab === t));
+  for (const [k, w] of Object.entries(VIEWS)) w.el.hidden = k !== t;
+  mainEl.classList.toggle('wide', !!v.wide);
+  const r = v.show && v.show();
+  if (r && r.catch) r.catch(e => console.error(e));
+}
+
+function setNav(items) {
+  navEl.replaceChildren(...items.map(([id, label]) => h('button', { 'data-tab': id, type: 'button', onclick: () => activateTab(id) }, label)));
+}
+function setUserbox() {
+  userEl.replaceChildren();
+  if (MODE === 'cloud' && ME) {
+    userEl.append(h('span', {}, `${ME.full_name || ME.login || 'Użytkownik'} · ${ROLE_LABEL[ME.role] || ME.role}`),
+      h('button', { class: 'secondary small', type: 'button', onclick: logout }, 'Wyloguj'));
+  } else if (MODE === 'local') {
+    userEl.append(h('span', {}, 'Tryb lokalny'),
+      h('button', { class: 'secondary small', type: 'button', onclick: () => showLogin() }, 'Logowanie'));
+  }
+}
+
+/* ==========================================================================
+   LOGOWANIE I WEJŚCIE DO APLIKACJI
+   ========================================================================== */
+async function signOutQuiet() { try { if (sb) await sb.auth.signOut(); } catch (e) { console.warn(e); } }
+
+function resetAppState() {
+  clearTimeout(syncTimer); syncTimer = null;
+  ME = null; MODE = null; questions = []; QUIZ = []; synced.clear(); sel = null;
+  editorBuilt = false; slidesShown = false; dirty = false;
+  saveState = { kind: 'idle', text: '' };
+  QCTX = { kind: 'preview' }; resetSession();
+}
+
+async function signIn(loginRaw, password) {
+  if (!sb) throw new Error('Brak połączenia z biblioteką Supabase. Odśwież stronę albo użyj trybu lokalnego.');
+  const l = String(loginRaw || '').trim();
+  if (!l || !password) throw new Error('Podaj login i hasło.');
+  const email = l.includes('@') ? l : `${l.toLowerCase()}@${CLOUD.loginDomain}`;
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) throw new Error(/invalid login credentials/i.test(error.message) ? 'Nieprawidłowy login lub hasło.' : error.message);
+  return data.user;
+}
+
+function showLogin(message = '') {
+  resetAppState(); setNav([]); setUserbox();
+  const err = h('div', { class: 'loginerr' }, message);
+  const user = h('input', { type: 'text', autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false', placeholder: 'np. ala.kowalska' });
+  const pass = h('input', { type: 'password', autocomplete: 'current-password', placeholder: 'Hasło' });
+  const btn = h('button', { class: 'primary', type: 'submit' }, 'Zaloguj');
+  const form = h('form', { class: 'card login' }, h('h2', {}, 'Logowanie'), field('Login', user), field('Hasło', pass), err, btn);
+  form.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    err.textContent = ''; btn.disabled = true; btn.textContent = 'Logowanie…';
+    try { const u = await signIn(user.value, pass.value); await enterApp(u); }
+    catch (e) { err.textContent = friendlyError(e); btn.disabled = false; btn.textContent = 'Zaloguj'; }
+  });
+  const local = h('div', { class: 'loginalt' },
+    h('button', { class: 'secondary small', type: 'button', onclick: enterLocal }, 'Użyj trybu lokalnego (bez logowania, dane tylko w tej przeglądarce)'));
+  loginEl.replaceChildren(form, local);
+  activateTab('login');
+  user.focus();
+}
+
+async function enterApp(user) {
+  let prof = null;
+  try {
+    const { data, error } = await sb.from('profiles').select('id,role,full_name,login,class_name,active').eq('id', user.id).maybeSingle();
+    if (error) throw error;
+    prof = data;
+  } catch (e) { await signOutQuiet(); return showLogin(friendlyError(e)); }
+  if (!prof) { await signOutQuiet(); return showLogin('To konto nie ma profilu w bazie. Skontaktuj się z nauczycielem.'); }
+  if (!prof.active) { await signOutQuiet(); return showLogin('To konto jest nieaktywne.'); }
+
+  resetAppState();
+  MODE = 'cloud'; ME = prof; dirty = true;
+  setUserbox();
+  if (ME.role === 'teacher') {
+    try { await loadCloudQuestions(); } catch (e) { await signOutQuiet(); return showLogin(friendlyError(e)); }
+    sel = questions[0]?.id ?? null;
+    setNav([['editor', 'Pytania'], ['sets', 'Zestawy'], ['results', 'Wyniki'], ['students', 'Uczniowie'], ['quiz', 'Podgląd'], ['slides', 'Prezentacja']]);
+    activateTab('editor');
+  } else {
+    setNav([['home', 'Moje zestawy'], ['slides', 'Prezentacja']]);
+    activateTab('home');
+  }
+}
+
+async function logout() {
+  if (MODE === 'cloud' && (syncTimer || syncActive)) {
+    const ok = await flushSync();
+    if (!ok && !confirm('Nie wszystkie zmiany zostały zapisane w bazie. Wylogować mimo to?')) return;
+  }
+  await signOutQuiet();
+  showLogin();
+}
+
+function enterLocal() {
+  resetAppState();
+  MODE = 'local';
+  questions = loadQuestions(); sel = questions[0]?.id ?? null;
+  refreshQuiz();
+  setUserbox();
+  setNav([['quiz', 'Sprawdzian'], ['slides', 'Prezentacja'], ['editor', 'Edytor']]);
+  showQuestion(); activateTab('quiz');
+}
+
+/* ==========================================================================
+   UCZEŃ: lista zestawów i rozwiązywanie z zapisem wyników
+   ========================================================================== */
+function studentCtx(quiz, attemptId) {
+  const inflight = [], pending = [];
+  const ctx = {
+    kind: 'student', quiz, attemptId, inflight, pending, resultPromise: null,
+    onAnswer(p) {
+      const row = {
+        attempt_id: attemptId, question_id: p.q.id, question_type: p.q.type, question_prompt: p.q.prompt,
+        answer: p.value === undefined ? null : p.value, status: p.status,
+        hints_used: p.hintsUsed, hints_total: p.q.hints.length, hint_minis: p.minis, time_spent_s: p.spent
+      };
+      inflight.push((async () => {
+        try {
+          const { error } = await sb.from('answers').insert(row);
+          if (error) throw error;
+        } catch (e) { console.warn('Zapis odpowiedzi nie powiódł się:', e); pending.push(row); }
+      })());
+    },
+    onFinish() {
+      if (ctx.resultPromise) return ctx.resultPromise;
+      ctx.resultPromise = (async () => {
+        await Promise.all(inflight);
+        for (let tries = 0; tries < 2 && pending.length; tries++) {      // ponów nieudane zapisy
+          const rows = pending.splice(0);
+          try {
+            const { error } = await sb.from('answers').insert(rows);
+            if (error) throw error;
+          } catch (e) { pending.push(...rows); }
+        }
+        if (pending.length) return { ok: false, error: 'nie wszystkie odpowiedzi udało się zapisać (sprawdź połączenie).' };
+        try {
+          const { error } = await sb.from('attempts').update({ finished_at: new Date().toISOString() }).eq('id', attemptId);
+          if (error) throw error;
+          return { ok: true };
+        } catch (e) { return { ok: false, error: friendlyError(e) }; }
+      })();
+      return ctx.resultPromise;
+    },
+    onExit() { activateTab('home'); }
+  };
+  return ctx;
+}
+
+async function startStudentQuiz(quiz) {
+  quizEl.replaceChildren(loadingBox());
+  activateTab('quiz');
+  try {
+    const qq = await sb.from('quiz_questions').select('question_id,position').eq('quiz_id', quiz.id).order('position', { ascending: true });
+    if (qq.error) throw qq.error;
+    const ids = qq.data.map(r => r.question_id);
+    let list = [];
+    if (ids.length) {
+      const qs = await sb.from('questions').select('id,type,content').in('id', ids);
+      if (qs.error) throw qs.error;
+      const byId = new Map(qs.data.map(r => [r.id, r]));
+      const used = new Set();
+      list = ids.map(id => byId.get(id)).filter(Boolean)
+        .map(r => normalizeImported({ ...(r.content || {}), id: r.id, type: r.type }, used)).filter(Boolean)
+        .filter(q => !problems(q).length).map(clean);
+    }
+    if (!list.length) {
+      QCTX = { kind: 'student', onExit: () => activateTab('home') }; QUIZ = []; resetSession(); showQuestion();
+      quizEl.append(h('button', { class: 'secondary', type: 'button', onclick: () => activateTab('home') }, 'Wróć do listy zestawów'));
+      return;
+    }
+    const att = await sb.from('attempts').insert({ quiz_id: quiz.id }).select('id').single();
+    if (att.error) throw att.error;
+    QCTX = studentCtx(quiz, att.data.id);
+    QUIZ = list; resetSession(); showQuestion();
+  } catch (e) {
+    quizEl.replaceChildren(errBox(e), h('button', { class: 'secondary', type: 'button', onclick: () => activateTab('home') }, 'Wróć do listy zestawów'));
+  }
+}
+
+async function showHome() {
+  homeEl.replaceChildren(loadingBox());
+  try {
+    const [qz, rs] = await Promise.all([
+      sb.from('quizzes').select('id,title,description,mode').order('created_at', { ascending: false }),
+      sb.from('results_overview').select('*').order('started_at', { ascending: false })
+    ]);
+    if (qz.error) throw qz.error;
+    if (rs.error) throw rs.error;
+    const out = [h('h2', { style: 'margin-top:0' }, `Cześć${ME.full_name ? ', ' + ME.full_name : ''}!`)];
+    if (!qz.data.length) out.push(h('div', { class: 'note' }, 'Nie masz jeszcze przypisanych zestawów. Poproś nauczyciela o udostępnienie zestawu.'));
+    qz.data.forEach(z => {
+      const done = rs.data.filter(r => r.quiz_id === z.id && r.finished_at);
+      const last = done[0];
+      out.push(h('div', { class: 'card setcard' },
+        h('h3', {}, z.title),
+        z.description ? h('p', { class: 'hint' }, z.description) : '',
+        h('div', { class: 'meta' }, last
+          ? `Ukończono: ${done.length}× · ostatni wynik: ${last.correct} z ${toNum(last.correct) + toNum(last.wrong)}` + (toNum(last.manual) ? ` (+${last.manual} do oceny)` : '')
+          : 'Jeszcze nie rozwiązywany'),
+        h('div', { class: 'rowbtns' }, h('button', { class: 'primary', type: 'button', onclick: () => startStudentQuiz(z) }, done.length ? 'Rozwiąż ponownie' : 'Rozpocznij'))));
+    });
+    if (rs.data.length) {
+      out.push(h('h3', {}, 'Moje wyniki'));
+      out.push(table(['Zestaw', 'Rozpoczęto', 'Status', 'Poprawne', 'Do oceny', 'Podpowiedzi'], rs.data.map(r => h('tr', {},
+        h('td', {}, r.quiz_title), h('td', {}, fmtDT(r.started_at)), h('td', {}, r.finished_at ? 'ukończony' : 'w toku'),
+        h('td', {}, `${toNum(r.correct)} z ${toNum(r.correct) + toNum(r.wrong)}`), h('td', {}, String(toNum(r.manual))),
+        h('td', {}, `${toNum(r.hints_used)} z ${toNum(r.hints_available)}`)))));
+    }
+    homeEl.replaceChildren(...out);
+  } catch (e) { homeEl.replaceChildren(errBox(e)); }
+}
+
+/* ==========================================================================
+   NAUCZYCIEL: zestawy pytań i przypisywanie uczniom
+   ========================================================================== */
+const SETS = { list: [], qq: [], as: [], students: [], cur: null, orig: null, cls: '', flash: '' };
+
+async function loadSetsData() {
+  const [qz, qq, as, st] = await Promise.all([
+    sb.from('quizzes').select('id,title,description,mode,published,created_at').order('created_at', { ascending: false }),
+    sb.from('quiz_questions').select('quiz_id,question_id,position'),
+    sb.from('assignments').select('quiz_id,student_id'),
+    sb.from('profiles').select('id,full_name,login,class_name,active').eq('role', 'student')
+      .order('class_name', { ascending: true }).order('full_name', { ascending: true })
+  ]);
+  for (const r of [qz, qq, as, st]) if (r.error) throw r.error;
+  Object.assign(SETS, { list: qz.data, qq: qq.data, as: as.data, students: st.data });
+  if (SETS.cur && SETS.cur.id && !SETS.list.some(z => z.id === SETS.cur.id)) SETS.cur = null;
+}
+
+async function showSets() {
+  setsEl.replaceChildren(loadingBox());
+  try {
+    // pytania muszą być już w bazie, zanim trafią do zestawu (klucz obcy)
+    if (!(await flushSync())) throw new Error('Najpierw trzeba zapisać pytania w bazie – zapis się nie powiódł (zobacz zakładkę „Pytania”).');
+    await loadSetsData();
+  } catch (e) { setsEl.replaceChildren(errBox(e)); return; }
+  renderSets();
+}
+
+function openSet(id) {
+  const z = id ? SETS.list.find(x => x.id === id) : null;
+  SETS.cur = z
+    ? { id: z.id, title: z.title, description: z.description || '', mode: z.mode, published: z.published,
+        qids: SETS.qq.filter(r => r.quiz_id === id).sort((a, b) => a.position - b.position).map(r => r.question_id),
+        sids: new Set(SETS.as.filter(r => r.quiz_id === id).map(r => r.student_id)) }
+    : { id: null, title: '', description: '', mode: 'practice', published: false, qids: [], sids: new Set() };
+  SETS.orig = { qids: [...SETS.cur.qids], sids: new Set(SETS.cur.sids) };
+  renderSets();
+}
+
+function renderSets() {
+  const list = h('div', { class: 'qlist' });
+  list.append(h('button', { class: 'primary', type: 'button', onclick: () => openSet(null) }, '+ Nowy zestaw'));
+  if (!SETS.list.length) list.append(h('p', { class: 'hint' }, 'Brak zestawów. Utwórz pierwszy.'));
+  SETS.list.forEach(z => {
+    const nq = SETS.qq.filter(r => r.quiz_id === z.id).length, ns = SETS.as.filter(r => r.quiz_id === z.id).length;
+    list.append(h('div', { class: 'qrow' + (SETS.cur && SETS.cur.id === z.id ? ' sel' : ''), onclick: () => openSet(z.id) },
+      h('div', { class: 't' }, h('b', {}, z.title || '(bez nazwy)'), h('span', {}, `${nq} pytań · ${ns} uczniów`)),
+      h('span', { class: 'badge ' + (z.published ? 'on' : '') }, z.published ? 'opublikowany' : 'szkic')));
+  });
+  const form = h('div');
+  if (SETS.cur) form.append(setForm());
+  else form.append(h('div', { class: 'card' }, h('p', { class: 'hint' }, 'Wybierz zestaw z listy albo utwórz nowy.')));
+  setsEl.replaceChildren(h('div', { class: 'editor' }, list, form));
+}
+
+function questionPicker() {
+  const c = SETS.cur, wrap = h('div');
+  const byId = new Map(questions.map(q => [q.id, q]));
+  const draw = () => {
+    wrap.replaceChildren();
+    c.qids = c.qids.filter(id => byId.has(id));
+    const chosen = h('div', { class: 'pick' });
+    if (!c.qids.length) chosen.append(h('p', { class: 'hint' }, 'Nie wybrano jeszcze pytań. Dodaj je z listy poniżej.'));
+    c.qids.forEach((id, i) => {
+      const q = byId.get(id);
+      const mv = d => () => { const j = i + d; if (j < 0 || j >= c.qids.length) return; [c.qids[i], c.qids[j]] = [c.qids[j], c.qids[i]]; draw(); };
+      const up = h('button', { class: 'secondary small', type: 'button', title: 'Wcześniej', onclick: mv(-1) }, '↑');
+      const dn = h('button', { class: 'secondary small', type: 'button', title: 'Później', onclick: mv(1) }, '↓');
+      up.disabled = i === 0; dn.disabled = i === c.qids.length - 1;
+      chosen.append(h('div', { class: 'pickrow' }, h('span', {}, `${i + 1}.`),
+        h('span', { class: 't' }, plainTitle(q) + (problems(q).length ? ' ⚠' : '')), up, dn,
+        h('button', { class: 'secondary small danger', type: 'button', title: 'Usuń z zestawu', onclick: () => { c.qids.splice(i, 1); draw(); } }, '✕')));
+    });
+    const avail = h('div', { class: 'pick' });
+    const rest = questions.filter(q => !c.qids.includes(q.id));
+    if (!rest.length) avail.append(h('p', { class: 'hint' }, questions.length ? 'Wszystkie pytania są już w zestawie.' : 'Brak pytań – dodaj je w zakładce „Pytania”.'));
+    rest.forEach(q => avail.append(h('div', { class: 'pickrow' },
+      h('span', { class: 't' }, plainTitle(q) + (problems(q).length ? ' ⚠' : ''), h('span', { class: 'hint' }, ' – ' + TYPE_LABEL[q.type])),
+      h('button', { class: 'secondary small', type: 'button', onclick: () => { c.qids.push(q.id); draw(); } }, '+ dodaj'))));
+    wrap.append(chosen, h('div', { class: 'hint' }, 'Dostępne pytania:'), avail);
+  };
+  draw();
+  return wrap;
+}
+
+function studentPicker() {
+  const c = SETS.cur, wrap = h('div');
+  const classes = [...new Set(SETS.students.map(s => s.class_name || '').filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pl'));
+  const clsSel = h('select');
+  clsSel.append(h('option', { value: '' }, 'Wszystkie klasy'));
+  classes.forEach(k => clsSel.append(h('option', { value: k }, k)));
+  clsSel.value = SETS.cls;
+  const box = h('div', { class: 'pick' });
+  const cnt = h('span', { class: 'hint' });
+  const visible = () => SETS.students.filter(s => !SETS.cls || s.class_name === SETS.cls);
+  const count = () => { cnt.textContent = `Wybrano: ${c.sids.size}`; };
+  const draw = () => {
+    box.replaceChildren();
+    if (!SETS.students.length) box.append(h('p', { class: 'hint' }, 'Brak uczniów. Dodaj konta uczniów (zakładka „Uczniowie”) – pojawią się tu automatycznie.'));
+    visible().forEach(s => {
+      const cb = h('input', { type: 'checkbox' }); cb.checked = c.sids.has(s.id);
+      cb.onchange = () => { if (cb.checked) c.sids.add(s.id); else c.sids.delete(s.id); count(); };
+      box.append(h('label', { class: 'pickrow' }, cb, h('span', { class: 't' },
+        s.full_name || s.login || '(bez nazwy)',
+        s.class_name ? h('span', { class: 'hint' }, ' · ' + s.class_name) : '',
+        s.active ? '' : h('span', { class: 'badge warn' }, 'nieaktywny'))));
+    });
+  };
+  clsSel.onchange = () => { SETS.cls = clsSel.value; draw(); };
+  const all = h('button', { class: 'secondary small', type: 'button', onclick: () => { visible().forEach(s => c.sids.add(s.id)); draw(); count(); } }, 'Zaznacz widocznych');
+  const none = h('button', { class: 'secondary small', type: 'button', onclick: () => { visible().forEach(s => c.sids.delete(s.id)); draw(); count(); } }, 'Odznacz widocznych');
+  wrap.append(h('div', { class: 'filters' }, clsSel, all, none, cnt), box);
+  draw(); count();
+  return wrap;
+}
+
+async function saveSet(c, orig) {
+  const base = { title: c.title.trim(), description: c.description.trim(), mode: c.mode, published: !!c.published };
+  let id = c.id;
+  if (!id) {
+    const r = await sb.from('quizzes').insert(base).select('id').single();
+    if (r.error) throw r.error;
+    id = r.data.id;
+  } else {
+    const r = await sb.from('quizzes').update(base).eq('id', id);
+    if (r.error) throw r.error;
+  }
+  const removedQ = orig.qids.filter(x => !c.qids.includes(x));
+  if (removedQ.length) {
+    const r = await sb.from('quiz_questions').delete().eq('quiz_id', id).in('question_id', removedQ);
+    if (r.error) throw r.error;
+  }
+  if (c.qids.length) {
+    const r = await sb.from('quiz_questions')
+      .upsert(c.qids.map((question_id, position) => ({ quiz_id: id, question_id, position })), { onConflict: 'quiz_id,question_id' });
+    if (r.error) throw r.error;
+  }
+  const addedS = [...c.sids].filter(x => !orig.sids.has(x)), removedS = [...orig.sids].filter(x => !c.sids.has(x));
+  if (removedS.length) {
+    const r = await sb.from('assignments').delete().eq('quiz_id', id).in('student_id', removedS);
+    if (r.error) throw r.error;
+  }
+  if (addedS.length) {
+    const r = await sb.from('assignments').insert(addedS.map(student_id => ({ quiz_id: id, student_id })));
+    if (r.error) throw r.error;
+  }
+  return id;
+}
+
+function setForm() {
+  const c = SETS.cur;
+  const msg = h('div', { class: 'note', hidden: '' });
+  const say = (text, kind = '') => { msg.hidden = !text; msg.className = 'note ' + kind; msg.textContent = text || ''; };
+  const card = h('div', { class: 'card' }, msg);
+  if (SETS.flash) { say(SETS.flash, 'good'); SETS.flash = ''; }
+  card.append(field('Nazwa zestawu', textInput(c.title, v => { c.title = v; }, 'np. Funkcja kwadratowa – powtórka')));
+  card.append(field('Opis (opcjonalnie)', textArea(c.description, v => { c.description = v; }, 2)));
+  const modeSel = h('select');
+  [['practice', 'Ćwiczenie'], ['test', 'Sprawdzian']].forEach(([k, v]) => modeSel.append(h('option', { value: k }, v)));
+  modeSel.value = c.mode; modeSel.onchange = () => { c.mode = modeSel.value; };
+  card.append(field('Rodzaj', modeSel, 'Na razie oba rodzaje działają tak samo: odpowiedzi ocenia przeglądarka ucznia.'));
+  const pub = h('input', { type: 'checkbox' }); pub.checked = !!c.published; pub.onchange = () => { c.published = pub.checked; };
+  card.append(h('label', { class: 'opt' }, pub, h('span', {}, 'Opublikowany – przypisani uczniowie widzą ten zestaw')));
+  card.append(field('Pytania w zestawie (w kolejności zadawania)', questionPicker()));
+  card.append(field('Uczniowie, którzy dostają ten zestaw', studentPicker()));
+
+  const save = h('button', { class: 'primary', type: 'button' }, 'Zapisz zestaw');
+  save.onclick = async () => {
+    if (!c.title.trim()) { say('Podaj nazwę zestawu.', 'bad'); return; }
+    if (c.published && !c.qids.length) { say('Opublikowany zestaw musi mieć co najmniej jedno pytanie.', 'bad'); return; }
+    save.disabled = true; say('Zapisywanie…');
+    try {
+      const id = await saveSet(c, SETS.orig);
+      await loadSetsData();
+      SETS.flash = 'Zestaw zapisany.';
+      openSet(id);
+    } catch (e) { save.disabled = false; say('Nie udało się zapisać: ' + friendlyError(e), 'bad'); }
+  };
+  const btns = h('div', { class: 'rowbtns' }, save);
+  if (c.id) btns.append(h('button', { class: 'secondary danger', type: 'button', onclick: async () => {
+    try {
+      const r = await sb.from('results_overview').select('attempt_id').eq('quiz_id', c.id);
+      const n = r.data ? r.data.length : 0;
+      if (!confirm(n ? `Ten zestaw ma ${n} zapisanych podejść uczniów. Usunięcie zestawu usunie je razem z odpowiedziami. Usunąć na pewno?` : 'Usunąć ten zestaw?')) return;
+      const d = await sb.from('quizzes').delete().eq('id', c.id);
+      if (d.error) throw d.error;
+      SETS.cur = null; await loadSetsData(); renderSets();
+    } catch (e) { say('Nie udało się usunąć: ' + friendlyError(e), 'bad'); }
+  } }, 'Usuń zestaw'));
+  card.append(btns);
+  return card;
+}
+
+/* ==========================================================================
+   NAUCZYCIEL: wyniki uczniów i użyte podpowiedzi
+   ========================================================================== */
+const RES = { rows: [], f: { quiz: '', cls: '', q: '', hints: false }, open: null, answers: null };
+
+async function showResults() {
+  resultsEl.replaceChildren(loadingBox());
+  try {
+    const r = await sb.from('results_overview').select('*').order('started_at', { ascending: false }).limit(500);
+    if (r.error) throw r.error;
+    RES.rows = r.data; RES.open = null; RES.answers = null;
+  } catch (e) { resultsEl.replaceChildren(errBox(e)); return; }
+  renderResults();
+}
+
+function fmtAnswer(a) {
+  const v = a.answer;
+  if (v === null || v === undefined || v === '') return '—';
+  switch (a.question_type) {
+    case 'single': return `opcja nr ${Number(v) + 1}`;
+    case 'multi': return Array.isArray(v) && v.length ? 'opcje nr ' + v.map(i => i + 1).join(', ') : '—';
+    case 'geogebra': return typeof v === 'object' ? `punkt (${(+v.x).toFixed(2)}; ${(+v.y).toFixed(2)})` : String(v);
+    default: return String(v);
+  }
+}
+
+function gradeCell(a) {
+  if (a.status !== 'manual') return a.points != null ? String(a.points) : '—';
+  const pts = h('input', { type: 'number', step: '0.5', min: '0', placeholder: 'pkt' }); pts.value = a.points ?? '';
+  const cm = h('textarea', { rows: '2', placeholder: 'Komentarz' }); cm.value = a.teacher_comment ?? '';
+  const st = h('span', { class: 'hint' }, a.reviewed_at ? 'ocenione' : '');
+  const btn = h('button', { class: 'secondary small', type: 'button' }, 'Zapisz');
+  btn.onclick = async () => {
+    btn.disabled = true; st.textContent = 'Zapisywanie…';
+    const upd = { points: pts.value === '' ? null : Number(pts.value), teacher_comment: cm.value.trim() || null, reviewed_at: new Date().toISOString() };
+    try {
+      const r = await sb.from('answers').update(upd).eq('id', a.id);
+      if (r.error) throw r.error;
+      Object.assign(a, upd); st.textContent = 'zapisano ✓';
+    } catch (e) { st.textContent = 'Błąd: ' + friendlyError(e); }
+    btn.disabled = false;
+  };
+  return h('div', { class: 'grade' }, pts, cm, btn, st);
+}
+
+function answersTable(list) {
+  const STATUS = { correct: 'poprawnie', wrong: 'błędnie', manual: 'do oceny' };
+  return table(['#', 'Pytanie', 'Odpowiedź ucznia', 'Wynik', 'Podpowiedzi', 'Czas', 'Ocena nauczyciela'], list.map((a, i) => {
+    const minis = Array.isArray(a.hint_minis) ? a.hint_minis : [];
+    return h('tr', {},
+      h('td', {}, String(i + 1)),
+      h('td', {}, plainTitle({ prompt: a.question_prompt })),
+      h('td', { style: 'white-space:pre-wrap' }, fmtAnswer(a)),
+      h('td', {}, h('span', { class: 'badge ' + (a.status === 'correct' ? 'on' : a.status === 'manual' ? 'warn' : '') }, STATUS[a.status] || a.status)),
+      h('td', {}, `${toNum(a.hints_used)} z ${toNum(a.hints_total)}`,
+        ...minis.map(m => h('div', { class: 'hint' }, `podp. ${m.hint}: ${m.attempts} prób${m.solved ? ' ✓' : ' ✗'}`))),
+      h('td', {}, a.time_spent_s != null ? a.time_spent_s + ' s' : '—'),
+      h('td', {}, gradeCell(a)));
+  }));
+}
+
+function renderResults() {
+  const f = RES.f;
+  const uniq = key => [...new Set(RES.rows.map(r => r[key]).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b), 'pl'));
+  const mkSel = (val, values, allLabel, on) => {
+    const s = h('select'); s.append(h('option', { value: '' }, allLabel));
+    values.forEach(v => s.append(h('option', { value: v }, v)));
+    s.value = val; s.onchange = () => on(s.value); return s;
+  };
+  const tableHolder = h('div'), detailHolder = h('div');
+  const drawTable = () => {
+    const rows = RES.rows.filter(r => (!f.quiz || r.quiz_title === f.quiz) && (!f.cls || r.class_name === f.cls)
+      && (!f.q || `${r.student_name} ${r.student_login}`.toLowerCase().includes(f.q.toLowerCase()))
+      && (!f.hints || toNum(r.hints_used) > 0));
+    tableHolder.replaceChildren(rows.length
+      ? table(['Uczeń', 'Klasa', 'Zestaw', 'Rozpoczęto', 'Status', 'Poprawne', 'Błędne', 'Do oceny', 'Podpowiedzi'], rows.map(r => {
+          const tr = h('tr', { class: 'click' + (RES.open && RES.open.attempt_id === r.attempt_id ? ' sel' : ''), onclick: () => openAttempt(r) },
+            h('td', {}, r.student_name || r.student_login || '—'), h('td', {}, r.class_name || '—'), h('td', {}, r.quiz_title),
+            h('td', {}, fmtDT(r.started_at)), h('td', {}, r.finished_at ? 'ukończony' : 'w toku'),
+            h('td', {}, String(toNum(r.correct))), h('td', {}, String(toNum(r.wrong))), h('td', {}, String(toNum(r.manual))),
+            h('td', {}, `${toNum(r.hints_used)} z ${toNum(r.hints_available)}`));
+          return tr;
+        }))
+      : h('p', { class: 'hint' }, RES.rows.length ? 'Brak wyników dla wybranych filtrów.' : 'Nikt jeszcze nie rozwiązywał zestawów.'));
+  };
+  const drawDetail = () => {
+    detailHolder.replaceChildren();
+    const r = RES.open; if (!r) return;
+    const card = h('div', { class: 'card detail' },
+      h('h3', { style: 'margin-top:0' }, `${r.student_name || r.student_login} – ${r.quiz_title}`),
+      h('div', { class: 'meta' }, `Rozpoczęto: ${fmtDT(r.started_at)} · ${r.finished_at ? 'zakończono: ' + fmtDT(r.finished_at) : 'w toku'} · użyte podpowiedzi: ${toNum(r.hints_used)} z ${toNum(r.hints_available)}`));
+    if (!RES.answers) card.append(loadingBox());
+    else if (RES.answers.error) card.append(errBox(RES.answers.error));
+    else if (!RES.answers.data.length) card.append(h('p', { class: 'hint' }, 'Brak zapisanych odpowiedzi.'));
+    else card.append(answersTable(RES.answers.data));
+    detailHolder.append(card);
+  };
+  async function openAttempt(r) {
+    RES.open = r; RES.answers = null; drawTable(); drawDetail();
+    const a = await sb.from('answers').select('*').eq('attempt_id', r.attempt_id).order('created_at', { ascending: true });
+    if (RES.open !== r) return;
+    RES.answers = a.error ? { error: a.error } : { data: a.data };
+    drawDetail();
+  }
+
+  const qInp = h('input', { type: 'text', placeholder: 'Szukaj ucznia…' }); qInp.value = f.q;
+  qInp.addEventListener('input', () => { f.q = qInp.value; drawTable(); });
+  const hintsCb = h('input', { type: 'checkbox' }); hintsCb.checked = f.hints;
+  hintsCb.onchange = () => { f.hints = hintsCb.checked; drawTable(); };
+  const filters = h('div', { class: 'filters' },
+    mkSel(f.quiz, uniq('quiz_title'), 'Wszystkie zestawy', v => { f.quiz = v; drawTable(); }),
+    mkSel(f.cls, uniq('class_name'), 'Wszystkie klasy', v => { f.cls = v; drawTable(); }),
+    qInp, h('label', {}, hintsCb, 'tylko z użytymi podpowiedziami'),
+    h('button', { class: 'secondary small', type: 'button', onclick: showResults }, 'Odśwież'));
+  resultsEl.replaceChildren(h('div', { class: 'card' }, filters, tableHolder), detailHolder);
+  drawTable(); drawDetail();
+}
+
+/* ==========================================================================
+   NAUCZYCIEL: uczniowie
+   ========================================================================== */
+const LOGIN_OK = /^[a-z0-9._-]{3,40}$/;
+function genPassword(len = 10) {
+  const A = 'abcdefghijkmnpqrstuvwxyz23456789';      // bez znaków łatwych do pomylenia (0/o, 1/l)
+  const b = new Uint8Array(len); crypto.getRandomValues(b);
+  return [...b].map(x => A[x % A.length]).join('');
+}
+async function manageStudents(body) {
+  const { data, error } = await sb.functions.invoke('manage-students', { body });
+  if (error) {
+    let m = '';
+    try { const j = await error.context.json(); m = j.error || ''; } catch (e) { /* brak treści */ }
+    if (/not found|404/i.test(String(error.message)) && !m)
+      m = 'Nie znaleziono funkcji „manage-students”. Wdróż ją w Supabase (Edge Functions) zgodnie z instrukcją.';
+    throw new Error(m || error.message);
+  }
+  if (data && data.error) throw new Error(data.error);
+  return data;
+}
+const csvCell = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+function downloadCreds(rows) {
+  const csv = '﻿' + [['Login', 'Hasło', 'Imię i nazwisko', 'Klasa'], ...rows.map(r => [r.login, r.password, r.full_name, r.class_name])]
+    .map(r => r.map(csvCell).join(';')).join('\r\n');
+  const a = h('a', { href: URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })), download: 'dane-logowania-uczniow.csv' });
+  document.body.append(a); a.click(); a.remove();
+}
+
+const STU = { rows: [], creds: null, draft: '', cls: '' };
+
+async function showStudents() {
+  studentsEl.replaceChildren(loadingBox());
+  try {
+    const r = await sb.from('profiles').select('id,full_name,login,class_name,active,created_at').eq('role', 'student')
+      .order('class_name', { ascending: true }).order('full_name', { ascending: true });
+    if (r.error) throw r.error;
+    STU.rows = r.data;
+  } catch (e) { studentsEl.replaceChildren(errBox(e)); return; }
+  renderStudents();
+}
+
+function addStudentsCard() {
+  const msg = h('div', { class: 'note', hidden: '' });
+  const say = (t, k = '') => { msg.hidden = !t; msg.className = 'note ' + k; msg.textContent = t || ''; };
+  const ta = h('textarea', { rows: '5', placeholder: '2a01\n2a02\n2a03' }); ta.value = STU.draft;
+  ta.addEventListener('input', () => { STU.draft = ta.value; });
+  const cls = h('input', { type: 'text', placeholder: 'np. 2A' }); cls.value = STU.cls;
+  cls.addEventListener('input', () => { STU.cls = cls.value; });
+  const btn = h('button', { class: 'primary', type: 'button' }, 'Utwórz konta');
+  btn.onclick = async () => {
+    const lines = ta.value.split('\n').map(x => x.trim()).filter(Boolean);
+    if (!lines.length) { say('Wpisz co najmniej jedną nazwę użytkownika (każda w osobnej linii).', 'bad'); return; }
+    if (lines.length > 100) { say('Jednorazowo można utworzyć najwyżej 100 kont.', 'bad'); return; }
+    const taken = new Set(STU.rows.map(x => x.login).filter(Boolean)), seen = new Set(), bad = [], list = [];
+    for (const line of lines) {
+      const [lg, ...rest] = line.split(/[;\t,]/);
+      const login = lg.trim().toLowerCase();
+      if (!LOGIN_OK.test(login)) bad.push(`„${lg.trim()}” – dozwolone 3–40 znaków: a–z, 0–9, kropka, myślnik, podkreślnik`);
+      else if (taken.has(login) || seen.has(login)) bad.push(`„${login}” – taka nazwa już istnieje lub się powtarza`);
+      else { seen.add(login); list.push({ full_name: rest.join(' ').trim(), class_name: cls.value.trim(), login, password: genPassword() }); }
+    }
+    if (bad.length) { say('Popraw listę: ' + bad.join('; ') + '.', 'bad'); return; }
+    btn.disabled = true; say('Tworzenie kont…');
+    try {
+      const { results } = await manageStudents({ action: 'create', students: list });
+      const byLogin = new Map(list.map(s => [s.login, s]));
+      const done = results.filter(r => r.ok).map(r => byLogin.get(r.login));
+      const failed = results.filter(r => !r.ok);
+      STU.creds = done.length ? { rows: done } : null;
+      STU.draft = failed.map(f => f.login).join('\n');
+      if (!failed.length) STU.cls = '';
+      STU.failed = failed.map(f => `${f.login}: ${f.error}`);
+      await showStudents();
+    } catch (e) { btn.disabled = false; say('Nie udało się utworzyć kont: ' + friendlyError(e), 'bad'); }
+  };
+  return h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Dodaj uczniów'), msg,
+    field('Nazwy użytkowników (jedna w linii)', ta, 'Wpisz własne kody, np. 2a01. Dozwolone: małe litery bez polskich znaków, cyfry, kropka, myślnik, podkreślnik (3–40 znaków). Hasło jest losowe. Opcjonalnie możesz dopisać po średniku imię i nazwisko, np. 2a01;Jan Kowalski.'),
+    field('Klasa (opcjonalnie, dla wszystkich z listy)', cls),
+    h('div', { class: 'rowbtns' }, btn));
+}
+
+function credsCard() {
+  const c = STU.creds; if (!c) return '';
+  return h('div', { class: 'card' },
+    h('div', { class: 'note good' }, `Utworzono kont: ${c.rows.length}. Hasła widać tylko teraz – zapisz je lub pobierz plik, bo później nie da się ich odczytać (można je tylko zresetować).`),
+    table(['Login', 'Hasło', 'Imię i nazwisko', 'Klasa'], c.rows.map(r => h('tr', {},
+      h('td', {}, h('code', {}, r.login)), h('td', {}, h('code', {}, r.password)), h('td', {}, r.full_name || '—'), h('td', {}, r.class_name || '—')))),
+    h('div', { class: 'rowbtns' },
+      h('button', { class: 'primary', type: 'button', onclick: () => downloadCreds(c.rows) }, 'Pobierz jako plik CSV'),
+      h('button', { class: 'secondary', type: 'button', onclick: () => { STU.creds = null; renderStudents(); } }, 'Ukryj hasła')));
+}
+
+function renderStudents() {
+  const out = [];
+  if (STU.failed && STU.failed.length) {
+    out.push(h('div', { class: 'note bad' }, 'Nie udało się utworzyć: ' + STU.failed.join(' · ') + ' (te osoby zostały na liście do ponowienia).'));
+    STU.failed = null;
+  }
+  out.push(credsCard(), addStudentsCard());
+  const rows = STU.rows.map(s => {
+    const st = h('span', { class: 'hint' });
+    const name = h('input', { type: 'text', placeholder: 'Imię i nazwisko' }); name.value = s.full_name || '';
+    const cls = h('input', { type: 'text', placeholder: 'np. 2A' }); cls.value = s.class_name || '';
+    const act = h('input', { type: 'checkbox' }); act.checked = !!s.active;
+    const save = async () => {
+      st.textContent = 'Zapisywanie…';
+      const upd = { full_name: name.value.trim(), class_name: cls.value.trim() || null, active: act.checked };
+      try {
+        const u = await sb.from('profiles').update(upd).eq('id', s.id);
+        if (u.error) throw u.error;
+        Object.assign(s, upd); st.textContent = 'zapisano ✓';
+      } catch (e) { st.textContent = 'Błąd: ' + friendlyError(e); }
+    };
+    name.addEventListener('change', save); cls.addEventListener('change', save); act.addEventListener('change', save);
+    const reset = h('button', { class: 'secondary small', type: 'button', onclick: async () => {
+      if (!confirm(`Ustawić nowe hasło dla: ${s.login}?`)) return;
+      const password = genPassword(); st.textContent = 'Zmiana hasła…';
+      try {
+        await manageStudents({ action: 'reset_password', id: s.id, password });
+        STU.creds = { rows: [{ full_name: s.full_name, class_name: s.class_name, login: s.login, password }] };
+        renderStudents(); window.scrollTo({ top: 0 });
+      } catch (e) { st.textContent = 'Błąd: ' + friendlyError(e); }
+    } }, 'Nowe hasło');
+    const del = h('button', { class: 'secondary small danger', type: 'button', onclick: async () => {
+      if (!confirm(`Usunąć konto: ${s.login}? Razem z nim zniknie cała historia jego wyników. Tej operacji nie można cofnąć (jeśli chcesz tylko zablokować logowanie, odznacz „Aktywny”).`)) return;
+      st.textContent = 'Usuwanie…';
+      try { await manageStudents({ action: 'delete', id: s.id }); await showStudents(); }
+      catch (e) { st.textContent = 'Błąd: ' + friendlyError(e); }
+    } }, 'Usuń');
+    return h('tr', {}, h('td', {}, s.login || '—'), h('td', {}, name), h('td', {}, cls), h('td', {}, act), h('td', {}, reset, ' ', del), h('td', {}, st));
+  });
+  out.push(h('div', { class: 'card' }, rows.length ? table(['Login', 'Imię i nazwisko', 'Klasa', 'Aktywny', '', ''], rows)
+    : h('p', { class: 'hint' }, 'Nie ma jeszcze żadnych uczniów. Dodaj pierwszych powyżej.')));
+  studentsEl.replaceChildren(...out);
+}
+
+/* ==========================================================================
+   START
+   ========================================================================== */
+
+async function boot() {
+  const params = new URLSearchParams(location.search);
+  if (params.get('tryb') === 'lokalny' || !CLOUD.url) return enterLocal();
+  try {
+    const { createClient } = await import(CLOUD.lib);
+    sb = createClient(CLOUD.url, CLOUD.key);
+  } catch (e) {
+    console.warn('Biblioteka Supabase niedostępna:', e);
+    return showLogin('Nie udało się załadować biblioteki Supabase (sprawdź internet). Możesz użyć trybu lokalnego.');
+  }
+  try {
+    const { data } = await sb.auth.getSession();
+    if (data && data.session) return enterApp(data.session.user);
+  } catch (e) { console.warn('Odczyt sesji nie powiódł się:', e); }
+  showLogin();
+}
+await boot();
+</script>
+</body>
+</html>
