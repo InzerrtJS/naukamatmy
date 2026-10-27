@@ -132,6 +132,11 @@
   .tbl tr.click { cursor: pointer; }
   .tbl tr.click:hover, .tbl tr.sel { background: var(--bg); }
   .tbl input[type=text], .tbl input[type=number] { padding: 5px 8px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 10px; border-radius: 999px; font-size: .8rem; background: var(--bg); border: 1px solid var(--line); }
+  .chip.ro { padding: 1px 8px; font-size: .7rem; color: var(--muted); }
+  .chip button { border: 0; background: none; cursor: pointer; color: var(--muted); font-size: .9rem; padding: 0 6px; line-height: 1; }
+  .qrow .tg { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
   .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: .75rem; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
   .badge.on { color: var(--ok); border-color: var(--ok); }
   .badge.warn { color: var(--info); border-color: var(--info); }
@@ -427,7 +432,7 @@ const uid = uuidv4;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function blank(type) {
-  const base = { id: uid(), type, prompt: '', explanation: '', hints: [] };
+  const base = { id: uid(), type, prompt: '', explanation: '', hints: [], tags: [] };
   switch (type) {
     case 'single':     return { ...base, options: ['', ''], correct: null };
     case 'multi':      return { ...base, options: ['', ''], correct: [] };
@@ -438,6 +443,24 @@ function blank(type) {
     default: throw new Error('Nieznany typ: ' + type);
   }
 }
+
+// Tagi: tablica krótkich napisów, bez duplikatów (wielkość liter bez znaczenia).
+const MAX_TAGS = 20, MAX_TAG_LEN = 40;
+function normTags(a) {
+  const seen = new Set(), out = [];
+  for (const t of (Array.isArray(a) ? a : [])) {
+    const v = String(t ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_TAG_LEN).trim();
+    const k = v.toLowerCase();
+    if (v && !seen.has(k) && out.length < MAX_TAGS) { seen.add(k); out.push(v); }
+  }
+  return out;
+}
+const sameTag = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
+const allTags = qs => {
+  const m = new Map();
+  qs.forEach(q => (q.tags || []).forEach(t => { const k = t.toLowerCase(); const e = m.get(k); if (e) e.n++; else m.set(k, { tag: t, n: 1 }); }));
+  return [...m.values()].sort((a, b) => a.tag.localeCompare(b.tag, 'pl'));
+};
 
 const nonEmpty = a => (Array.isArray(a) ? a : []).map(s => String(s ?? '').trim()).filter(Boolean);
 
@@ -524,6 +547,7 @@ function clean(q) {
   if (c.expected) c.expected = nonEmpty(c.expected);
   if (c.setup) c.setup = nonEmpty(c.setup);
   c.hints = cleanHints(c.hints);
+  c.tags = normTags(c.tags);
   if (c.type === 'short_math') { c.vars = nonEmpty(c.vars); if (!c.vars.length) c.vars = ['x']; }
   return c;
 }
@@ -549,6 +573,7 @@ function normalizeImported(raw, usedIds) {
   // migracja starego pojedynczego pola „hint” (pierwsza wersja prototypu)
   if (typeof q.hint === 'string' && q.hint.trim() && !q.hints.length) q.hints = [{ text: q.hint.trim(), mini: null }];
   delete q.hint;
+  q.tags = normTags(q.tags);
   if (!q.id || usedIds.has(q.id)) q.id = uid();
   usedIds.add(q.id);
   return q;
@@ -909,7 +934,72 @@ document.addEventListener('keydown', e => {
 const editorEl = document.getElementById('editor');
 let sel = null;
 let editorBuilt = false;
-let statusEl, listEl, formEl;
+let statusEl, listEl, formEl, filterEl, tagSelEl, textFiltEl, tagToolsEl;
+const EF = { tag: '', text: '' };
+const matchesFilter = q => (!EF.tag || (q.tags || []).some(t => sameTag(t, EF.tag)))
+  && (!EF.text || plainTitle(q).toLowerCase().includes(EF.text.toLowerCase()));
+
+function renameTagEverywhere(from, to) {
+  to = normTags([to])[0]; if (!to) return 0;
+  let n = 0;
+  questions.forEach(q => {
+    if ((q.tags || []).some(t => sameTag(t, from))) { q.tags = normTags(q.tags.map(t => (sameTag(t, from) ? to : t))); n++; }
+  });
+  return n;
+}
+function removeTagEverywhere(tag) {
+  let n = 0;
+  questions.forEach(q => { const k = (q.tags || []).filter(t => !sameTag(t, tag)); if (k.length !== (q.tags || []).length) { q.tags = k; n++; } });
+  return n;
+}
+function refreshFilterBar() {
+  if (!tagSelEl) return;
+  const tags = allTags(questions);
+  if (EF.tag && !tags.some(t => sameTag(t.tag, EF.tag))) EF.tag = '';
+  tagSelEl.replaceChildren(h('option', { value: '' }, `Wszystkie tagi (${questions.length})`),
+    ...tags.map(t => h('option', { value: t.tag }, `${t.tag} (${t.n})`)));
+  tagSelEl.value = EF.tag;
+  tagToolsEl.hidden = !EF.tag;
+}
+function buildFilterBar() {
+  tagSelEl = h('select'); tagSelEl.onchange = () => { EF.tag = tagSelEl.value; renderList(); };
+  textFiltEl = h('input', { type: 'text', placeholder: 'Szukaj w treści…' }); textFiltEl.value = EF.text;
+  textFiltEl.addEventListener('input', () => { EF.text = textFiltEl.value; renderList(); });
+  tagToolsEl = h('div', { class: 'rowbtns', hidden: '' },
+    h('button', { class: 'secondary small', type: 'button', onclick: () => {
+      const nv = prompt(`Nowa nazwa tagu „${EF.tag}” (we wszystkich pytaniach):`, EF.tag);
+      if (nv === null) return;
+      const old = EF.tag; if (!renameTagEverywhere(old, nv)) return;
+      EF.tag = normTags([nv])[0] || ''; commit(); renderForm();
+    } }, 'Zmień nazwę tagu'),
+    h('button', { class: 'secondary small danger', type: 'button', onclick: () => {
+      if (!confirm(`Usunąć tag „${EF.tag}” ze wszystkich pytań? Same pytania zostaną.`)) return;
+      removeTagEverywhere(EF.tag); EF.tag = ''; commit(); renderForm();
+    } }, 'Usuń tag'));
+  filterEl = h('div', { class: 'card', style: 'padding:10px;margin-bottom:8px' }, tagSelEl, textFiltEl, tagToolsEl);
+}
+
+function tagsField(q) {
+  const wrap = h('div'), chips = h('div', { class: 'chips' });
+  const dl = h('datalist', { id: 'taglist' });
+  const inp = h('input', { type: 'text', list: 'taglist', placeholder: 'Wpisz tag i naciśnij Enter', maxlength: String(MAX_TAG_LEN) });
+  const draw = () => {
+    chips.replaceChildren(...q.tags.map(t => h('span', { class: 'chip' }, t,
+      h('button', { type: 'button', title: 'Usuń tag', onclick: () => { q.tags = q.tags.filter(x => x !== t); commit(); draw(); } }, '✕'))));
+    dl.replaceChildren(...allTags(questions).filter(x => !q.tags.some(t => sameTag(t, x.tag))).map(x => h('option', { value: x.tag })));
+  };
+  const add = raw => {
+    const next = normTags([...q.tags, ...String(raw).split(',')]);
+    if (next.length === q.tags.length) { inp.value = ''; return; }
+    q.tags = next; inp.value = ''; commit(); draw();
+  };
+  inp.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ',') { ev.preventDefault(); add(inp.value); } });
+  inp.addEventListener('change', () => { if (inp.value.trim()) add(inp.value); });
+  draw();
+  wrap.append(chips, inp, dl);
+  return field('Tagi', wrap, `Np. temat, poziom, klasa. Do ${MAX_TAGS} tagów; wielkość liter nie ma znaczenia. Po tagach możesz filtrować pytania w edytorze i przy składaniu zestawów.`);
+}
+
 
 const field = (label, el, help) => h('div', { class: 'field' }, h('label', {}, label), el, help ? h('div', { class: 'hint' }, help) : '');
 const textInput = (value, onInput, placeholder = '') => {
@@ -952,8 +1042,12 @@ function commit() {
 function renderList() {
   if (!listEl) return;
   listEl.replaceChildren();
+  refreshFilterBar();
+  const filtering = !!(EF.tag || EF.text);
   if (!questions.length) listEl.append(h('p', { class: 'hint' }, 'Brak pytań. Dodaj pierwsze przyciskiem powyżej.'));
+  if (questions.length && !questions.some(matchesFilter)) listEl.append(h('p', { class: 'hint' }, 'Żadne pytanie nie pasuje do filtra.'));
   questions.forEach((q, idx) => {
+    if (!matchesFilter(q)) return;
     const bad = problems(q).length > 0;
     const move = (d) => (ev) => {
       ev.stopPropagation();
@@ -962,7 +1056,7 @@ function renderList() {
     };
     const up = h('button', { class: 'secondary small', type: 'button', title: 'W górę', onclick: move(-1) }, '↑');
     const down = h('button', { class: 'secondary small', type: 'button', title: 'W dół', onclick: move(1) }, '↓');
-    up.disabled = idx === 0; down.disabled = idx === questions.length - 1;
+    up.disabled = filtering || idx === 0; down.disabled = filtering || idx === questions.length - 1;
     const del = h('button', { class: 'secondary small danger', type: 'button', title: 'Usuń pytanie', onclick: ev => {
       ev.stopPropagation();
       if (!confirm(MODE === 'cloud' ? 'Usunąć to pytanie z bazy? Zniknie też ze wszystkich zestawów (zapisane wyniki uczniów zostaną).' : 'Usunąć to pytanie?')) return;
@@ -972,7 +1066,8 @@ function renderList() {
     } }, '✕');
     listEl.append(h('div', { class: 'qrow' + (q.id === sel ? ' sel' : ''), onclick: () => { sel = q.id; renderList(); renderForm(); } },
       h('div', { class: 'warn', title: bad ? 'Pytanie wymaga poprawek' : '' }, bad ? '⚠' : ''),
-      h('div', { class: 't' }, h('b', {}, `${idx + 1}. ${plainTitle(q)}`), h('span', {}, TYPE_LABEL[q.type])),
+      h('div', { class: 't' }, h('b', {}, `${idx + 1}. ${plainTitle(q)}`), h('span', {}, TYPE_LABEL[q.type]),
+        (q.tags || []).length ? h('div', { class: 'tg' }, q.tags.map(t => h('span', { class: 'chip ro' }, t))) : ''),
       up, down, del));
   });
 }
@@ -1143,10 +1238,12 @@ function renderForm() {
   typeSel.value = q.type;
   typeSel.onchange = () => {
     if (!confirm('Zmiana typu usunie dane odpowiedzi tego pytania (treść, podpowiedzi i wyjaśnienie zostaną). Kontynuować?')) { typeSel.value = q.type; return; }
-    const n = { ...blank(typeSel.value), id: q.id, prompt: q.prompt, explanation: q.explanation, hints: q.hints };
+    const n = { ...blank(typeSel.value), id: q.id, prompt: q.prompt, explanation: q.explanation, hints: q.hints, tags: q.tags };
     questions[questions.indexOf(q)] = n; commit(); renderForm();
   };
   card.append(field('Typ pytania', typeSel));
+  if (!Array.isArray(q.tags)) q.tags = [];
+  card.append(tagsField(q));
 
   const promptPv = previewBox(q.prompt);
   card.append(field('Treść pytania', textArea(q.prompt, v => { q.prompt = v; setRich(promptPv, v); commit(); refreshProblems(); }, 3),
@@ -1276,7 +1373,8 @@ function buildEditor() {
     fileIn, statusEl);
   listEl = h('div', { class: 'qlist' });
   formEl = h('div');
-  editorEl.replaceChildren(toolbar, h('div', { class: 'editor' }, listEl, formEl));
+  buildFilterBar();
+  editorEl.replaceChildren(toolbar, h('div', { class: 'editor' }, h('div', {}, filterEl, listEl), formEl));
   editorBuilt = true;
 }
 
@@ -1571,6 +1669,23 @@ async function startStudentQuiz(quiz) {
   }
 }
 
+async function openMyAttempt(r, box) {
+  box.replaceChildren(h('div', { class: 'card detail' }, loadingBox()));
+  const a = await sb.from('answers').select('*').eq('attempt_id', r.attempt_id).order('created_at', { ascending: true });
+  if (a.error) { box.replaceChildren(errBox(a.error)); return; }
+  const STATUS = { correct: 'poprawnie', wrong: 'błędnie', manual: 'czeka na ocenę' };
+  const items = a.data.map((x, i) => {
+    const reviewed = x.status === 'manual' && x.reviewed_at;
+    return h('div', { class: 'card' },
+      h('div', { class: 'meta' }, `Pytanie ${i + 1} · `, h('span', { class: 'badge ' + (x.status === 'correct' || reviewed ? 'on' : x.status === 'manual' ? 'warn' : '') }, reviewed ? 'ocenione przez nauczyciela' : STATUS[x.status] || x.status)),
+      h('p', {}, plainTitle({ prompt: x.question_prompt })),
+      h('div', { class: 'hint' }, 'Twoja odpowiedź:'), h('div', { style: 'white-space:pre-wrap;margin-bottom:8px' }, fmtAnswer(x)),
+      x.points != null ? h('div', {}, h('b', {}, 'Punkty: '), String(x.points)) : '',
+      x.teacher_comment ? h('div', { class: 'note' }, h('b', {}, 'Komentarz nauczyciela: '), x.teacher_comment) : '');
+  });
+  box.replaceChildren(h('h3', {}, r.quiz_title + ' – ' + fmtDT(r.started_at)), ...(items.length ? items : [h('p', { class: 'hint' }, 'Brak zapisanych odpowiedzi.')]));
+}
+
 async function showHome() {
   homeEl.replaceChildren(loadingBox());
   try {
@@ -1595,10 +1710,13 @@ async function showHome() {
     });
     if (rs.data.length) {
       out.push(h('h3', {}, 'Moje wyniki'));
-      out.push(table(['Zestaw', 'Rozpoczęto', 'Status', 'Poprawne', 'Do oceny', 'Podpowiedzi'], rs.data.map(r => h('tr', {},
+      const detail = h('div');
+      out.push(h('p', { class: 'hint' }, 'Kliknij wynik, aby zobaczyć swoje odpowiedzi, oceny i komentarze nauczyciela.'));
+      out.push(table(['Zestaw', 'Rozpoczęto', 'Status', 'Poprawne', 'Do oceny', 'Podpowiedzi'], rs.data.map(r => h('tr', { class: 'click', onclick: () => openMyAttempt(r, detail) },
         h('td', {}, r.quiz_title), h('td', {}, fmtDT(r.started_at)), h('td', {}, r.finished_at ? 'ukończony' : 'w toku'),
         h('td', {}, `${toNum(r.correct)} z ${toNum(r.correct) + toNum(r.wrong)}`), h('td', {}, String(toNum(r.manual))),
         h('td', {}, `${toNum(r.hints_used)} z ${toNum(r.hints_available)}`)))));
+      out.push(detail);
     }
     homeEl.replaceChildren(...out);
   } catch (e) { homeEl.replaceChildren(errBox(e)); }
@@ -1607,7 +1725,7 @@ async function showHome() {
 /* ==========================================================================
    NAUCZYCIEL: zestawy pytań i przypisywanie uczniom
    ========================================================================== */
-const SETS = { list: [], qq: [], as: [], students: [], cur: null, orig: null, cls: '', flash: '' };
+const SETS = { list: [], qq: [], as: [], students: [], cur: null, orig: null, cls: '', flash: '', tag: '' };
 
 async function loadSetsData() {
   const [qz, qq, as, st] = await Promise.all([
@@ -1660,10 +1778,11 @@ function renderSets() {
 }
 
 function questionPicker() {
-  const c = SETS.cur, wrap = h('div');
+  const c = SETS.cur, wrap = h('div'), box = h('div');
+  const tagSel = h('select');
   const byId = new Map(questions.map(q => [q.id, q]));
   const draw = () => {
-    wrap.replaceChildren();
+    box.replaceChildren();
     c.qids = c.qids.filter(id => byId.has(id));
     const chosen = h('div', { class: 'pick' });
     if (!c.qids.length) chosen.append(h('p', { class: 'hint' }, 'Nie wybrano jeszcze pytań. Dodaj je z listy poniżej.'));
@@ -1678,13 +1797,22 @@ function questionPicker() {
         h('button', { class: 'secondary small danger', type: 'button', title: 'Usuń z zestawu', onclick: () => { c.qids.splice(i, 1); draw(); } }, '✕')));
     });
     const avail = h('div', { class: 'pick' });
-    const rest = questions.filter(q => !c.qids.includes(q.id));
-    if (!rest.length) avail.append(h('p', { class: 'hint' }, questions.length ? 'Wszystkie pytania są już w zestawie.' : 'Brak pytań – dodaj je w zakładce „Pytania”.'));
+    const rest = questions.filter(q => !c.qids.includes(q.id) && (!SETS.tag || (q.tags || []).some(t => sameTag(t, SETS.tag))));
+    if (!rest.length) avail.append(h('p', { class: 'hint' }, !questions.length ? 'Brak pytań – dodaj je w zakładce „Pytania”.' : SETS.tag ? 'Brak pytań z tym tagiem poza już wybranymi.' : 'Wszystkie pytania są już w zestawie.'));
+    addAll.disabled = !rest.length; addAll.textContent = rest.length ? `+ dodaj wszystkie widoczne (${rest.length})` : '+ dodaj wszystkie widoczne';
+    addAll.onclick = () => { rest.forEach(q => c.qids.push(q.id)); draw(); };
     rest.forEach(q => avail.append(h('div', { class: 'pickrow' },
-      h('span', { class: 't' }, plainTitle(q) + (problems(q).length ? ' ⚠' : ''), h('span', { class: 'hint' }, ' – ' + TYPE_LABEL[q.type])),
+      h('span', { class: 't' }, plainTitle(q) + (problems(q).length ? ' ⚠' : ''), h('span', { class: 'hint' }, ' – ' + TYPE_LABEL[q.type]),
+        (q.tags || []).map(t => h('span', { class: 'chip ro', style: 'margin-left:4px' }, t))),
       h('button', { class: 'secondary small', type: 'button', onclick: () => { c.qids.push(q.id); draw(); } }, '+ dodaj'))));
-    wrap.append(chosen, h('div', { class: 'hint' }, 'Dostępne pytania:'), avail);
+    box.append(chosen, h('div', { class: 'filters' }, h('span', { class: 'hint' }, 'Dostępne pytania:'), tagSel, addAll), avail);
   };
+  tagSel.append(h('option', { value: '' }, 'Wszystkie tagi'), ...allTags(questions).map(t => h('option', { value: t.tag }, `${t.tag} (${t.n})`)));
+  if (!allTags(questions).some(t => sameTag(t.tag, SETS.tag))) SETS.tag = '';
+  tagSel.value = SETS.tag;
+  tagSel.onchange = () => { SETS.tag = tagSel.value; draw(); };
+  const addAll = h('button', { class: 'secondary small', type: 'button' });
+  wrap.append(box);
   draw();
   return wrap;
 }
