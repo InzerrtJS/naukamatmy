@@ -164,7 +164,7 @@
 </head>
 <body>
 <header>
-  <h1>Quiz</h1>
+  <h1>Quiz <small id="ver" style="font-size:.5em;font-weight:400;opacity:.6"></small></h1>
   <nav id="nav"></nav>
   <div class="userbox" id="userbox"></div>
 </header>
@@ -1447,6 +1447,8 @@ const setsEl = document.getElementById('sets');
 const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 
+const APP_VERSION = '2026-10-28 · bez prezentacji u ucznia';
+document.getElementById('ver').textContent = 'wersja ' + APP_VERSION;
 const ROLE_LABEL = { teacher: 'nauczyciel', student: 'uczeń' };
 const fmtDT = s => (s ? new Date(s).toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' }) : '—');
 const toNum = v => Number(v) || 0;
@@ -1569,7 +1571,7 @@ async function enterApp(user) {
     setNav([['editor', 'Pytania'], ['sets', 'Zestawy'], ['results', 'Wyniki'], ['students', 'Uczniowie'], ['quiz', 'Podgląd'], ['slides', 'Prezentacja']]);
     activateTab('editor');
   } else {
-    setNav([['home', 'Moje zestawy'], ['slides', 'Prezentacja']]);
+    setNav([['home', 'Moje zestawy']]);
     activateTab('home');
   }
 }
