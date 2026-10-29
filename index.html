@@ -465,8 +465,8 @@ const allTags = qs => {
 const nonEmpty = a => (Array.isArray(a) ? a : []).map(s => String(s ?? '').trim()).filter(Boolean);
 
 // ---- podpowiedzi: { text, mini: { prompt, options[], correct } | null } ----
-// kind: 'choice' (jednokrotny wybór) albo 'text' (krótka odpowiedź wpisana przez ucznia)
-const blankMini = (kind = 'choice') => ({ kind, prompt: '', options: ['', ''], correct: null, accepted: [''] });
+// kind: 'choice' (jednokrotny wybór), 'text' (krótka odpowiedź tekstowa) albo 'math' (wyrażenie matematyczne)
+const blankMini = (kind = 'choice') => ({ kind, prompt: '', options: ['', ''], correct: null, accepted: [''], expected: [''], vars: ['x'], form: 'any' });
 // Porównanie krótkiej odpowiedzi: bez różnicy wielkości liter i spacji, przecinek = kropka dziesiętna.
 const miniNorm = s => norm(s).replace(/(\d),(\d)/g, '$1.$2');
 const miniTextOk = (mini, v) => !!miniNorm(v) && nonEmpty(mini.accepted).map(miniNorm).includes(miniNorm(v));
@@ -478,7 +478,10 @@ const normHint = x => {
   return {
     text: String(x && x.text != null ? x.text : ''),
     mini: m && typeof m === 'object' ? {
-      kind: m.kind === 'text' ? 'text' : 'choice',
+      kind: m.kind === 'text' || m.kind === 'math' ? m.kind : 'choice',
+      expected: (Array.isArray(m.expected) && m.expected.length ? m.expected : ['']).map(o => String(o ?? '')),
+      vars: (Array.isArray(m.vars) && m.vars.length ? m.vars : ['x']).map(o => String(o ?? '')),
+      form: typeof m.form === 'string' ? m.form : 'any',
       accepted: (Array.isArray(m.accepted) && m.accepted.length ? m.accepted : ['']).map(o => String(o ?? '')),
       prompt: String(m.prompt ?? ''),
       options: (Array.isArray(m.options) ? m.options : []).map(o => String(o ?? '')),
@@ -488,7 +491,7 @@ const normHint = x => {
 };
 // Podpowiedzi gotowe dla ucznia: bez pustych (brak tekstu i brak mini-pytania).
 const cleanHints = a => (Array.isArray(a) ? a : []).map(normHint)
-  .map(x => ({ ...x, text: x.text.trim(), mini: x.mini ? { ...x.mini, accepted: nonEmpty(x.mini.accepted) } : null })).filter(x => x.text || x.mini);
+  .map(x => ({ ...x, text: x.text.trim(), mini: x.mini ? { ...x.mini, accepted: nonEmpty(x.mini.accepted), expected: nonEmpty(x.mini.expected), vars: nonEmpty(x.mini.vars).length ? nonEmpty(x.mini.vars) : ['x'] } : null })).filter(x => x.text || x.mini);
 
 // Lista problemów uniemożliwiających użycie pytania w sprawdzianie.
 function problems(q) {
@@ -540,6 +543,14 @@ function problems(q) {
     const pre = `Podpowiedź ${i + 1}, mini-pytanie: `;
     const mo = Array.isArray(m.options) ? m.options : [];
     if (!String(m.prompt ?? '').trim()) p.push(pre + 'brak treści.');
+    if (m.kind === 'math') {
+      const ex = nonEmpty(m.expected), f = m.form || 'any';
+      if (!ex.length) p.push(pre + 'podaj co najmniej jedną poprawną odpowiedź (LaTeX).');
+      if (!(f in FORMS)) p.push(pre + 'nieznana wymagana postać wyniku.');
+      else if (f !== 'any' && f !== 'exact')
+        ex.forEach(e => { if (!formOk(e, f, nonEmpty(m.vars))) p.push(`${pre}wzorcowa odpowiedź „${e}” nie ma wymaganej postaci (${FORM_NAME[f]}).`); });
+      return;
+    }
     if (m.kind === 'text') { if (!nonEmpty(m.accepted).length) p.push(pre + 'podaj co najmniej jedną poprawną odpowiedź.'); return; }
     if (mo.length < 2 || mo.some(o => !String(o ?? '').trim())) p.push(pre + 'potrzebne co najmniej 2 niepuste odpowiedzi.');
     else if (!(Number.isInteger(m.correct) && m.correct >= 0 && m.correct < mo.length)) p.push(pre + 'zaznacz poprawną odpowiedź.');
@@ -777,6 +788,27 @@ function buildMini(mini, name, qi, hi) {
   (S.mini[qi] ??= [])[hi] = rec;
   const fbm = h('div', { class: 'minifb' });
   const box = h('div', { class: 'mini' }, rich('div', mini.prompt, 'miniq'));
+  if (mini.kind === 'math') {
+    let get, field0;
+    if (HAS_MATHFIELD) { field0 = document.createElement('math-field'); get = () => field0.value; }
+    else { field0 = h('input', { type: 'text', placeholder: 'np. 4x lub \\frac{1}{2}' }); get = () => field0.value; }
+    const btn = h('button', { class: 'secondary small', type: 'button' }, 'Sprawdź');
+    const check = () => {
+      if (rec.solved) return;
+      const v = get(); if (!String(v ?? '').trim()) return;
+      rec.attempts++;
+      const r = gradeMath(CE, { expected: nonEmpty(mini.expected), vars: mini.vars, form: mini.form }, v);
+      if (r.status === 'correct') {
+        rec.solved = true; btn.disabled = true;
+        if (field0.tagName === 'MATH-FIELD') field0.readOnly = true; else field0.disabled = true;
+        fbm.className = 'minifb ok'; fbm.textContent = '✓ Dobrze!';
+      } else { fbm.className = 'minifb bad'; fbm.textContent = '✗ ' + (r.extra || 'To nie ta odpowiedź – spróbuj jeszcze raz.'); }
+    };
+    btn.onclick = check;
+    field0.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); check(); } });
+    box.append(field0, h('div', { style: 'margin-top:6px' }, btn), fbm);
+    return box;
+  }
   if (mini.kind === 'text') {
     const inp = h('input', { type: 'text', placeholder: 'Krótka odpowiedź', autocomplete: 'off' });
     const btn = h('button', { class: 'secondary small', type: 'button' }, 'Sprawdź');
@@ -1193,13 +1225,31 @@ function miniEditor(mini, changed) {
   const draw = () => {
     wrap.replaceChildren();
     const kindSel = h('select');
-    kindSel.append(h('option', { value: 'choice' }, 'Jednokrotny wybór'), h('option', { value: 'text' }, 'Krótka odpowiedź (wpisywana)'));
-    kindSel.value = mini.kind === 'text' ? 'text' : 'choice';
+    kindSel.append(h('option', { value: 'choice' }, 'Jednokrotny wybór'), h('option', { value: 'text' }, 'Krótka odpowiedź (tekst)'), h('option', { value: 'math' }, 'Krótka odpowiedź (wyrażenie matematyczne)'));
+    kindSel.value = mini.kind === 'text' || mini.kind === 'math' ? mini.kind : 'choice';
     kindSel.onchange = () => { mini.kind = kindSel.value; changed(); draw(); };
     wrap.append(field('Rodzaj mini-pytania', kindSel));
     const pv = previewBox(mini.prompt);
     wrap.append(field('Treść mini-pytania',
       textArea(mini.prompt, v => { mini.prompt = v; setRich(pv, v); changed(); }, 2, 'np. Z którego wzoru należy skorzystać?')), pv);
+    if (mini.kind === 'math') {
+      if (!Array.isArray(mini.expected)) mini.expected = [''];
+      if (!Array.isArray(mini.vars)) mini.vars = ['x'];
+      let pvm = mathPreviewLines(mini.expected.join('\n'));
+      wrap.append(field('Poprawne odpowiedzi – LaTeX (jedna w linii)',
+        textArea(mini.expected.join('\n'), v => { mini.expected = v.split('\n'); const n = mathPreviewLines(v); pvm.replaceWith(n); pvm = n; changed(); }, 2, 'a^2-2ab+b^2'),
+        'Odpowiedź ucznia jest uznawana, gdy jest matematycznie równoważna którejś z nich (i ma wymaganą postać).'), pvm);
+      const formHelp = h('div', { class: 'hint' }), formSel = h('select');
+      Object.entries(FORMS).forEach(([k, v]) => formSel.append(h('option', { value: k }, v)));
+      formSel.value = (mini.form in FORMS) ? mini.form : 'any';
+      const syncHelp = () => { formHelp.textContent = FORM_HELP[formSel.value] || ''; };
+      formSel.onchange = () => { mini.form = formSel.value; syncHelp(); changed(); };
+      syncHelp();
+      const ff = field('Wymagana postać wyniku', formSel); ff.append(formHelp); wrap.append(ff);
+      wrap.append(field('Zmienne (po przecinku)', textInput(mini.vars.join(', '), v => { mini.vars = v.split(','); changed(); }, 'x'),
+        'Zmienne występujące w wyrażeniach – służą do sprawdzania równoważności.'));
+      return;
+    }
     if (mini.kind === 'text') {
       if (!Array.isArray(mini.accepted)) mini.accepted = [''];
       wrap.append(field('Akceptowane odpowiedzi (jedna w linii)',
@@ -1498,7 +1548,7 @@ const setsEl = document.getElementById('sets');
 const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 
-const APP_VERSION = '2026-10-29 · wstrzymywanie podejść';
+const APP_VERSION = '2026-10-29 · mini-pytania z wyrażeniem';
 document.getElementById('ver').textContent = 'wersja ' + APP_VERSION;
 const ROLE_LABEL = { teacher: 'nauczyciel', student: 'uczeń' };
 const fmtDT = s => (s ? new Date(s).toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' }) : '—');
