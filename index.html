@@ -132,6 +132,13 @@
   .tbl tr.click { cursor: pointer; }
   .tbl tr.click:hover, .tbl tr.sel { background: var(--bg); }
   .tbl input[type=text], .tbl input[type=number] { padding: 5px 8px; }
+  .part { border-left: 3px solid var(--line); padding: 4px 0 4px 12px; margin: 12px 0; }
+  .part.ok { border-color: var(--ok); } .part.bad { border-color: var(--bad); } .part.manual { border-color: var(--info); }
+  .ptitle { margin-bottom: 6px; }
+  .pmark { font-size: .85rem; font-weight: 600; margin-top: 4px; } .part.ok .pmark { color: var(--ok); } .part.bad .pmark { color: var(--bad); }
+  .pexp { font-size: .9rem; color: var(--muted); margin-top: 2px; }
+  .tf { display: flex; gap: 18px; flex-wrap: wrap; }
+  .phead { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
   .chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 10px; border-radius: 999px; font-size: .8rem; background: var(--bg); border: 1px solid var(--line); }
   .chip.ro { padding: 1px 8px; font-size: .7rem; color: var(--muted); }
@@ -248,8 +255,13 @@ const SLIDES = [
 const TYPE_LABEL = {
   single: 'Jednokrotny wybór', multi: 'Wielokrotny wybór',
   short_text: 'Krótka odpowiedź (tekst)', short_math: 'Krótka odpowiedź (wyrażenie)',
-  long: 'Długa odpowiedź', geogebra: 'Zadanie z GeoGebrą'
+  long: 'Długa odpowiedź', geogebra: 'Zadanie z GeoGebrą',
+  truefalse: 'Prawda / fałsz', group: 'Zadanie z kilkoma poleceniami (części a, b, c…)'
 };
+// typy dozwolone jako części zadania z kilkoma poleceniami (bez GeoGebry i bez zagnieżdżania)
+const PART_TYPES = ['truefalse', 'single', 'multi', 'short_text', 'short_math', 'long'];
+const MAX_PARTS = 10;
+const partLetter = i => String.fromCharCode(97 + i) + ')';
 
 /* ==========================================================================
    CZYSTA LOGIKA (bez DOM) – sprawdzanie odpowiedzi i model danych pytań
@@ -439,6 +451,8 @@ function blank(type) {
     case 'short_text': return { ...base, accepted: [''] };
     case 'short_math': return { ...base, expected: [''], vars: ['x'], form: 'any' };
     case 'long':       return { ...base, model: '' };
+    case 'truefalse':  return { ...base, correct: null };
+    case 'group':      return { ...base, parts: [blank('truefalse'), blank('truefalse'), blank('long')] };
     case 'geogebra':   return { ...base, setup: ['A=(3,-2)'], target: { object: 'A', x: 0, y: 0, tol: 0.25 } };
     default: throw new Error('Nieznany typ: ' + type);
   }
@@ -526,6 +540,19 @@ function problems(q) {
     }
     case 'long':
       break;
+    case 'truefalse':
+      if (typeof q.correct !== 'boolean') p.push('Zaznacz, czy twierdzenie jest prawdziwe, czy fałszywe.');
+      break;
+    case 'group': {
+      const parts = Array.isArray(q.parts) ? q.parts : [];
+      if (!parts.length) p.push('Dodaj co najmniej jedną część zadania.');
+      if (parts.length > MAX_PARTS) p.push(`Zadanie może mieć najwyżej ${MAX_PARTS} części.`);
+      parts.forEach((pt, i) => {
+        if (!pt || !PART_TYPES.includes(pt.type)) { p.push(`Część ${partLetter(i)}: niedozwolony typ.`); return; }
+        problems(pt).forEach(m => p.push(`Część ${partLetter(i)} ${m}`));
+      });
+      break;
+    }
     case 'geogebra': {
       const t = q.target || {};
       if (!nonEmpty(q.setup).length) p.push('Podaj polecenia GeoGebry przygotowujące aplet.');
@@ -566,6 +593,7 @@ function clean(q) {
   if (c.setup) c.setup = nonEmpty(c.setup);
   c.hints = cleanHints(c.hints);
   c.tags = normTags(c.tags);
+  if (Array.isArray(c.parts)) c.parts = c.parts.map(pt => { const x = clean(pt); delete x.hints; delete x.tags; return x; });
   if (c.type === 'short_math') { c.vars = nonEmpty(c.vars); if (!c.vars.length) c.vars = ['x']; }
   return c;
 }
@@ -592,6 +620,15 @@ function normalizeImported(raw, usedIds) {
   if (typeof q.hint === 'string' && q.hint.trim() && !q.hints.length) q.hints = [{ text: q.hint.trim(), mini: null }];
   delete q.hint;
   q.tags = normTags(q.tags);
+  if (q.type === 'group') {
+    const seen = new Set();
+    q.parts = (Array.isArray(q.parts) ? q.parts : []).filter(pt => pt && PART_TYPES.includes(pt.type)).slice(0, MAX_PARTS).map(pt => {
+      const x = { ...blank(pt.type), ...pt };
+      if (!x.id || seen.has(x.id)) x.id = uid();
+      seen.add(x.id); delete x.hints; delete x.tags;
+      return x;
+    });
+  }
   if (!q.id || usedIds.has(q.id)) q.id = uid();
   usedIds.add(q.id);
   return q;
@@ -727,6 +764,49 @@ const TYPES = {
       return () => [...box.querySelectorAll('input:checked')].map(c => +c.value);
     },
     grade: (q, v) => ({ status: sameSet(v, q.correct) ? 'correct' : 'wrong' })
+  },
+  truefalse: {
+    build(q, box) {
+      box.append(h('div', { class: 'tf' }, [['true', 'Prawda'], ['false', 'Fałsz']].map(([v, t]) =>
+        h('label', { class: 'opt' }, h('input', { type: 'radio', name: q.id, value: v }), h('span', {}, t)))));
+      return () => { const c = box.querySelector('input:checked'); return c ? c.value === 'true' : null; };
+    },
+    grade: (q, v) => ({ status: v === q.correct ? 'correct' : 'wrong' })
+  },
+  group: {
+    build(q, box) {
+      const getters = q.parts.map((pt, i) => {
+        const body = h('div', { class: 'pbody' });
+        box.append(h('div', { class: 'part' }, h('div', { class: 'ptitle' }, h('b', {}, partLetter(i) + ' '), rich('span', pt.prompt)), body));
+        return TYPES[pt.type].build(pt, body);
+      });
+      return () => getters.map(g => g());
+    },
+    grade(q, v) {
+      const parts = q.parts.map((pt, i) => TYPES[pt.type].grade(pt, Array.isArray(v) ? v[i] : undefined));
+      const auto = parts.filter(r => r.status !== 'manual');
+      const okN = auto.filter(r => r.status === 'correct').length;
+      const status = parts.some(r => r.status === 'manual') ? 'manual' : (okN === auto.length ? 'correct' : 'wrong');
+      return { status, parts, extra: auto.length ? `Poprawne części oceniane automatycznie: ${okN} z ${auto.length}.` : '' };
+    },
+    reveal(q, body, r) {
+      body.querySelectorAll('.part').forEach((el, i) => {
+        const pr = r.parts[i], pt = q.parts[i];
+        el.classList.add(pr.status === 'correct' ? 'ok' : pr.status === 'manual' ? 'manual' : 'bad');
+        el.append(h('div', { class: 'pmark' }, { correct: '✓ Dobrze', wrong: '✗ Źle', manual: 'do oceny przez nauczyciela' }[pr.status]),
+          ...(pt.explanation ? [rich('div', pt.explanation, 'pexp')] : []), ...(pr.extra ? [rich('div', pr.extra, 'pexp')] : []));
+      });
+    },
+    // czytelny zapis odpowiedzi do bazy (z treścią części i oceną każdej z nich)
+    pack(q, v, r) {
+      const show = (pt, x) => {
+        if (pt.type === 'single') return Number.isInteger(x) ? String(pt.options[x] ?? '') : '';
+        if (pt.type === 'multi') return (Array.isArray(x) ? x : []).map(i => pt.options[i]).join('; ');
+        if (pt.type === 'truefalse') return x === true ? 'Prawda' : x === false ? 'Fałsz' : '';
+        return String(x ?? '');
+      };
+      return { parts: q.parts.map((pt, i) => ({ prompt: plainTitle(pt), answer: show(pt, Array.isArray(v) ? v[i] : undefined), status: r.parts[i].status })) };
+    }
   },
   short_text: {
     build(q, box) {
@@ -924,10 +1004,11 @@ function showQuestion() {
       fb.replaceChildren(h('strong', {}, LABEL[r.status]),
         ...(q.explanation ? [rich('div', q.explanation)] : []),
         ...(r.extra ? [rich('div', r.extra)] : []));
+      T.reveal?.(q, body, r);
       btn.textContent = S.i + 1 < QUIZ.length ? 'Dalej' : 'Zobacz wynik';
       // zapis odpowiedzi (tylko w podejściu ucznia): wynik, podpowiedzi i mini-pytania
       QCTX.onAnswer?.({
-        q, value, status: r.status, hintsUsed: used,
+        q, value: T.pack ? T.pack(q, value, r) : value, status: r.status, hintsUsed: used,
         minis: (S.mini[S.i] || []).map((m, k) => (m ? { hint: k + 1, attempts: m.attempts, solved: m.solved } : null)).filter(Boolean),
         spent: Math.round((Date.now() - qStart) / 1000)
       });
@@ -1329,31 +1410,8 @@ function refreshProblems() {
   problemsEl.hidden = !p.length;
 }
 
-function renderForm() {
-  formEl.replaceChildren();
-  const q = questions.find(x => x.id === sel);
-  if (!q) { formEl.append(h('div', { class: 'card' }, h('p', { class: 'hint' }, 'Wybierz pytanie z listy albo dodaj nowe.'))); return; }
-
-  const card = h('div', { class: 'card' });
-  problemsEl = h('ul', { class: 'problems' });
-  card.append(problemsEl);
-
-  const typeSel = h('select');
-  Object.entries(TYPE_LABEL).forEach(([k, v]) => typeSel.append(h('option', { value: k }, v)));
-  typeSel.value = q.type;
-  typeSel.onchange = () => {
-    if (!confirm('Zmiana typu usunie dane odpowiedzi tego pytania (treść, podpowiedzi i wyjaśnienie zostaną). Kontynuować?')) { typeSel.value = q.type; return; }
-    const n = { ...blank(typeSel.value), id: q.id, prompt: q.prompt, explanation: q.explanation, hints: q.hints, tags: q.tags };
-    questions[questions.indexOf(q)] = n; commit(); renderForm();
-  };
-  card.append(field('Typ pytania', typeSel));
-  if (!Array.isArray(q.tags)) q.tags = [];
-  card.append(tagsField(q));
-
-  const promptPv = previewBox(q.prompt);
-  card.append(field('Treść pytania', textArea(q.prompt, v => { q.prompt = v; setRich(promptPv, v); commit(); refreshProblems(); }, 3),
-    'Wzory wpisuj w LaTeX-u między znakami $, np. $x^2+1$. Poniżej widać podgląd.'), promptPv);
-
+// Edytory pól zależnych od typu – wspólne dla pytań i dla części zadania z kilkoma poleceniami.
+function typeEditor(q, card) {
   switch (q.type) {
     case 'single': case 'multi':
       card.append(field('Odpowiedzi', optionsEditor(q))); break;
@@ -1389,9 +1447,92 @@ function renderForm() {
       card.append(field('Wzorcowa odpowiedź (pokazywana po odpowiedzi ucznia)',
         textArea(q.model, v => { q.model = v; commit(); }, 4),
         'Pytania otwarte nie są oceniane automatycznie – nauczyciel ocenia je ręcznie.')); break;
+    case 'truefalse': {
+      const nm = 'tf' + uid(), mk = (val, text) => {
+        const r = h('input', { type: 'radio', name: nm }); r.checked = q.correct === val;
+        r.addEventListener('change', () => { q.correct = val; commit(); refreshProblems(); });
+        return h('label', { class: 'opt' }, r, h('span', {}, text));
+      };
+      card.append(field('Poprawna odpowiedź', h('div', { class: 'tf' }, mk(true, 'Prawda'), mk(false, 'Fałsz'))));
+      break;
+    }
+    case 'group':
+      card.append(field('Części zadania', partsEditor(q),
+        'Każda część to osobne polecenie (a, b, c…) z własnym typem. Uczeń odpowiada na wszystkie części naraz, a podpowiedzi i wyjaśnienie poniżej dotyczą całego zadania.')); break;
     case 'geogebra':
       card.append(ggbEditor(q)); break;
   }
+}
+
+function partsEditor(q) {
+  const wrap = h('div');
+  const draw = () => {
+    wrap.replaceChildren();
+    q.parts.forEach((pt, i) => {
+      const typeSel = h('select');
+      PART_TYPES.forEach(k => typeSel.append(h('option', { value: k }, TYPE_LABEL[k])));
+      typeSel.value = pt.type;
+      typeSel.onchange = () => {
+        if (!confirm('Zmiana typu usunie dane odpowiedzi tej części (jej treść zostanie). Kontynuować?')) { typeSel.value = pt.type; return; }
+        q.parts[i] = { ...blank(typeSel.value), id: pt.id, prompt: pt.prompt, explanation: pt.explanation };
+        commit(); draw(); refreshProblems();
+      };
+      const move = d => () => { const j = i + d; if (j < 0 || j >= q.parts.length) return; [q.parts[i], q.parts[j]] = [q.parts[j], q.parts[i]]; commit(); draw(); refreshProblems(); };
+      const up = h('button', { class: 'secondary small', type: 'button', title: 'Wyżej', onclick: move(-1) }, '↑');
+      const down = h('button', { class: 'secondary small', type: 'button', title: 'Niżej', onclick: move(1) }, '↓');
+      up.disabled = i === 0; down.disabled = i === q.parts.length - 1;
+      const del = h('button', { class: 'secondary small danger', type: 'button', title: 'Usuń część', onclick: () => {
+        if (!confirm('Usunąć tę część zadania?')) return;
+        q.parts.splice(i, 1); commit(); draw(); refreshProblems();
+      } }, '✕');
+      del.disabled = q.parts.length <= 1;
+      const pv = previewBox(pt.prompt);
+      const body = h('div', {}, field(pt.type === 'truefalse' ? 'Twierdzenie' : 'Treść części',
+        textArea(pt.prompt, v => { pt.prompt = v; setRich(pv, v); commit(); refreshProblems(); }, 2)), pv);
+      typeEditor(pt, body);
+      const exPv = previewBox(pt.explanation);
+      body.append(field('Wyjaśnienie po sprawdzeniu tej części (opcjonalnie)',
+        textArea(pt.explanation, v => { pt.explanation = v; setRich(exPv, v); commit(); }, 2)), exPv);
+      wrap.append(h('div', { class: 'mini-box' }, h('div', { class: 'phead' }, h('b', {}, partLetter(i)), typeSel, up, down, del), body));
+    });
+    const addSel = h('select');
+    PART_TYPES.forEach(k => addSel.append(h('option', { value: k }, TYPE_LABEL[k])));
+    const add = h('button', { class: 'secondary small', type: 'button', onclick: () => {
+      if (q.parts.length >= MAX_PARTS) { alert(`Zadanie może mieć najwyżej ${MAX_PARTS} części.`); return; }
+      q.parts.push(blank(addSel.value)); commit(); draw(); refreshProblems();
+    } }, '+ Dodaj część');
+    wrap.append(h('div', { class: 'phead', style: 'margin-top:10px' }, addSel, add));
+  };
+  draw();
+  return wrap;
+}
+
+function renderForm() {
+  formEl.replaceChildren();
+  const q = questions.find(x => x.id === sel);
+  if (!q) { formEl.append(h('div', { class: 'card' }, h('p', { class: 'hint' }, 'Wybierz pytanie z listy albo dodaj nowe.'))); return; }
+
+  const card = h('div', { class: 'card' });
+  problemsEl = h('ul', { class: 'problems' });
+  card.append(problemsEl);
+
+  const typeSel = h('select');
+  Object.entries(TYPE_LABEL).forEach(([k, v]) => typeSel.append(h('option', { value: k }, v)));
+  typeSel.value = q.type;
+  typeSel.onchange = () => {
+    if (!confirm('Zmiana typu usunie dane odpowiedzi tego pytania (treść, podpowiedzi i wyjaśnienie zostaną). Kontynuować?')) { typeSel.value = q.type; return; }
+    const n = { ...blank(typeSel.value), id: q.id, prompt: q.prompt, explanation: q.explanation, hints: q.hints, tags: q.tags };
+    questions[questions.indexOf(q)] = n; commit(); renderForm();
+  };
+  card.append(field('Typ pytania', typeSel));
+  if (!Array.isArray(q.tags)) q.tags = [];
+  card.append(tagsField(q));
+
+  const promptPv = previewBox(q.prompt);
+  card.append(field(q.type === 'group' ? 'Treść polecenia (wspólna dla wszystkich części)' : q.type === 'truefalse' ? 'Twierdzenie' : 'Treść pytania', textArea(q.prompt, v => { q.prompt = v; setRich(promptPv, v); commit(); refreshProblems(); }, 3),
+    'Wzory wpisuj w LaTeX-u między znakami $, np. $x^2+1$. Poniżej widać podgląd.'), promptPv);
+
+  typeEditor(q, card);
 
   card.append(field('Podpowiedzi (opcjonalnie)', hintsEditor(q),
     'Uczeń odsłania je po jednej, w tej kolejności – zacznij od najogólniejszej. Puste podpowiedzi są pomijane.'));
@@ -1552,7 +1693,7 @@ const setsEl = document.getElementById('sets');
 const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 
-const APP_VERSION = '2026-10-29 · wzory wieloliniowe';
+const APP_VERSION = '2026-10-29 · zadania z częściami';
 document.getElementById('ver').textContent = 'wersja ' + APP_VERSION;
 const ROLE_LABEL = { teacher: 'nauczyciel', student: 'uczeń' };
 const fmtDT = s => (s ? new Date(s).toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' }) : '—');
@@ -2085,6 +2226,12 @@ function fmtAnswer(a) {
   const v = a.answer;
   if (v === null || v === undefined || v === '') return '—';
   switch (a.question_type) {
+    case 'truefalse': return v === true ? 'Prawda' : v === false ? 'Fałsz' : '—';
+    case 'group': {
+      const ST = { correct: '✓', wrong: '✗', manual: '(do oceny)' };
+      return h('div', {}, (v.parts || []).map((x, i) => h('div', { style: 'margin-bottom:4px' },
+        h('b', {}, partLetter(i) + ' '), `${x.prompt}: `, h('span', {}, x.answer || '—'), ` ${ST[x.status] || ''}`)));
+    }
     case 'single': return `opcja nr ${Number(v) + 1}`;
     case 'multi': return Array.isArray(v) && v.length ? 'opcje nr ' + v.map(i => i + 1).join(', ') : '—';
     case 'geogebra': return typeof v === 'object' ? `punkt (${(+v.x).toFixed(2)}; ${(+v.y).toFixed(2)})` : String(v);
