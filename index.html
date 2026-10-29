@@ -668,7 +668,11 @@ function renderMath(el) {
     });
   }
 }
-const setRich = (el, text) => { el.innerHTML = esc(text).replace(/\n/g, '<br>'); renderMath(el); };
+// Nowe linie zamieniamy na <br> tylko poza wzorami – wewnątrz $…$ i $$…$$ (np. układ równań w kilku liniach)
+// przerwanie wzoru znacznikiem <br> uniemożliwiłoby jego wyrenderowanie.
+const richHTML = text => String(text ?? '').split(/(\$\$[\s\S]+?\$\$|\$[^$]+?\$)/g)
+  .map((part, i) => (i % 2 ? esc(part) : esc(part).replace(/\n/g, '<br>'))).join('');
+const setRich = (el, text) => { el.innerHTML = richHTML(text); renderMath(el); };
 const h = (tag, attrs = {}, ...kids) => {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -1548,7 +1552,7 @@ const setsEl = document.getElementById('sets');
 const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 
-const APP_VERSION = '2026-10-29 · mini-pytania z wyrażeniem';
+const APP_VERSION = '2026-10-29 · wzory wieloliniowe';
 document.getElementById('ver').textContent = 'wersja ' + APP_VERSION;
 const ROLE_LABEL = { teacher: 'nauczyciel', student: 'uczeń' };
 const fmtDT = s => (s ? new Date(s).toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' }) : '—');
