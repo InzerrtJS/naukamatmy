@@ -819,6 +819,16 @@ function lock(body) {
   body.querySelectorAll('math-field').forEach(m => { m.readOnly = true; });
 }
 
+// Zapamiętanie w tej przeglądarce, ile podpowiedzi odsłonięto w niezakończonym pytaniu (na wypadek pauzy).
+const hintMemoKey = () => `quiz:hints:${QCTX.attemptId}`;
+function memoHints(qid, used) {
+  if (!QCTX.attemptId) return;
+  try { const m = JSON.parse(localStorage.getItem(hintMemoKey()) || '{}'); m[qid] = used; localStorage.setItem(hintMemoKey(), JSON.stringify(m)); } catch (e) { /* brak localStorage */ }
+}
+function recallHints(qid) {
+  try { return Number(JSON.parse(localStorage.getItem(hintMemoKey()) || '{}')[qid]) || 0; } catch (e) { return 0; }
+}
+
 function showQuestion() {
   quizEl.replaceChildren();
   if (!QUIZ.length) {
@@ -828,6 +838,7 @@ function showQuestion() {
         : 'Brak pytań gotowych do użycia. Dodaj je lub popraw w edytorze pytań.')));
     return;
   }
+  while (QCTX.done && S.i < QUIZ.length && QCTX.done.has(QUIZ[S.i].id)) S.i++;   // pomiń pytania rozwiązane przed pauzą
   if (S.i >= QUIZ.length) return showSummary();
   const q = QUIZ[S.i], T = TYPES[q.type];
   const body = h('div', { class: 'body' });
@@ -851,12 +862,17 @@ function showQuestion() {
     if (hn.mini) item.append(buildMini(hn.mini, `${q.id}-h${used}`, S.i, used - 1));
     hintList.append(item);
     syncHintBtn();
+    memoHints(q.id, used);
   };
   syncHintBtn();
+  // po wznowieniu odsłoń od razu podpowiedzi, z których uczeń korzystał przed pauzą (liczą się do wyniku)
+  const memo = QCTX.attemptId ? recallHints(q.id) : 0;
+  for (let k = 0; k < Math.min(memo, q.hints.length); k++) hintBtn.onclick();
   const hintArea = q.hints.length ? [hintList, h('div', { class: 'hintctl' }, hintBtn)] : [];
 
   const card = h('div', { class: 'card' },
-    h('div', { class: 'meta' }, `Pytanie ${S.i + 1} z ${QUIZ.length}`),
+    h('div', { class: 'meta' }, `Pytanie ${S.i + 1} z ${QUIZ.length}`,
+      QCTX.attemptId ? h('button', { class: 'secondary small', type: 'button', style: 'float:right', title: 'Zapisz postęp i wróć do listy zestawów – możesz dokończyć później', onclick: () => QCTX.onPause() }, '⏸ Wstrzymaj i wyjdź') : ''),
     rich('div', q.prompt, 'prompt'), body, ...hintArea, fb, btn);
   quizEl.append(h('div', { class: 'bar' }, h('div', { style: `width:${(S.i / QUIZ.length) * 100}%` })), card);
   const get = T.build(q, body);
@@ -1482,7 +1498,7 @@ const setsEl = document.getElementById('sets');
 const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 
-const APP_VERSION = '2026-10-28 · mini-pytania z odpowiedzią wpisywaną';
+const APP_VERSION = '2026-10-29 · wstrzymywanie podejść';
 document.getElementById('ver').textContent = 'wersja ' + APP_VERSION;
 const ROLE_LABEL = { teacher: 'nauczyciel', student: 'uczeń' };
 const fmtDT = s => (s ? new Date(s).toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' }) : '—');
@@ -1650,17 +1666,26 @@ function studentCtx(quiz, attemptId) {
         } catch (e) { console.warn('Zapis odpowiedzi nie powiódł się:', e); pending.push(row); }
       })());
     },
+    // czeka na zapisy w toku i ponawia nieudane; true, gdy wszystko jest już w bazie
+    async flushAnswers() {
+      await Promise.all(inflight);
+      for (let tries = 0; tries < 2 && pending.length; tries++) {
+        const rows = pending.splice(0);
+        try {
+          const { error } = await sb.from('answers').insert(rows);
+          if (error) throw error;
+        } catch (e) { pending.push(...rows); }
+      }
+      return !pending.length;
+    },
+    async onPause() {
+      if (!(await ctx.flushAnswers()) && !confirm('Nie wszystkie odpowiedzi udało się zapisać (sprawdź połączenie). Jeśli wyjdziesz teraz, część odpowiedzi zostanie utracona. Wyjść mimo to?')) return;
+      activateTab('home');
+    },
     onFinish() {
       if (ctx.resultPromise) return ctx.resultPromise;
       ctx.resultPromise = (async () => {
-        await Promise.all(inflight);
-        for (let tries = 0; tries < 2 && pending.length; tries++) {      // ponów nieudane zapisy
-          const rows = pending.splice(0);
-          try {
-            const { error } = await sb.from('answers').insert(rows);
-            if (error) throw error;
-          } catch (e) { pending.push(...rows); }
-        }
+        await ctx.flushAnswers();
         if (pending.length) return { ok: false, error: 'nie wszystkie odpowiedzi udało się zapisać (sprawdź połączenie).' };
         try {
           const { error } = await sb.from('attempts').update({ finished_at: new Date().toISOString() }).eq('id', attemptId);
@@ -1675,7 +1700,7 @@ function studentCtx(quiz, attemptId) {
   return ctx;
 }
 
-async function startStudentQuiz(quiz) {
+async function startStudentQuiz(quiz, resumeId = null) {
   quizEl.replaceChildren(loadingBox());
   activateTab('quiz');
   try {
@@ -1697,10 +1722,26 @@ async function startStudentQuiz(quiz) {
       quizEl.append(h('button', { class: 'secondary', type: 'button', onclick: () => activateTab('home') }, 'Wróć do listy zestawów'));
       return;
     }
-    const att = await sb.from('attempts').insert({ quiz_id: quiz.id }).select('id').single();
-    if (att.error) throw att.error;
-    QCTX = studentCtx(quiz, att.data.id);
-    QUIZ = list; resetSession(); showQuestion();
+    let attemptId = resumeId, done = new Map();
+    if (resumeId) {
+      const old = await sb.from('answers').select('question_id,status,hints_used,hint_minis').eq('attempt_id', resumeId);
+      if (old.error) throw old.error;
+      old.data.forEach(a => { if (a.question_id) done.set(a.question_id, a); });
+    } else {
+      const att = await sb.from('attempts').insert({ quiz_id: quiz.id }).select('id').single();
+      if (att.error) throw att.error;
+      attemptId = att.data.id;
+    }
+    QCTX = studentCtx(quiz, attemptId);
+    QCTX.done = done;
+    QUIZ = list; resetSession();
+    // wznowienie: odtwórz wyniki już rozwiązanych pytań, żeby podsumowanie dotyczyło całego podejścia
+    QUIZ.forEach((q, i) => {
+      const a = done.get(q.id); if (!a) return;
+      S.res[i] = a.status; S.hints[i] = a.hints_used || 0;
+      (Array.isArray(a.hint_minis) ? a.hint_minis : []).forEach(m => { (S.mini[i] ??= [])[m.hint - 1] = { attempts: m.attempts, solved: !!m.solved }; });
+    });
+    showQuestion();
   } catch (e) {
     quizEl.replaceChildren(errBox(e), h('button', { class: 'secondary', type: 'button', onclick: () => activateTab('home') }, 'Wróć do listy zestawów'));
   }
@@ -1726,24 +1767,33 @@ async function openMyAttempt(r, box) {
 async function showHome() {
   homeEl.replaceChildren(loadingBox());
   try {
-    const [qz, rs] = await Promise.all([
+    const [qz, rs, qc] = await Promise.all([
       sb.from('quizzes').select('id,title,description,mode').order('created_at', { ascending: false }),
-      sb.from('results_overview').select('*').order('started_at', { ascending: false })
+      sb.from('results_overview').select('*').order('started_at', { ascending: false }),
+      sb.from('quiz_questions').select('quiz_id,question_id')
     ]);
     if (qz.error) throw qz.error;
     if (rs.error) throw rs.error;
+    if (qc.error) throw qc.error;
     const out = [h('h2', { style: 'margin-top:0' }, `Cześć${ME.full_name ? ', ' + ME.full_name : ''}!`)];
     if (!qz.data.length) out.push(h('div', { class: 'note' }, 'Nie masz jeszcze przypisanych zestawów. Poproś nauczyciela o udostępnienie zestawu.'));
     qz.data.forEach(z => {
       const done = rs.data.filter(r => r.quiz_id === z.id && r.finished_at);
       const last = done[0];
+      const newest = rs.data.find(r => r.quiz_id === z.id);                       // najnowsze podejście (lista jest posortowana malejąco)
+      const open = newest && !newest.finished_at ? newest : null;                  // niedokończone = można kontynuować
+      const total = qc.data.filter(r => r.quiz_id === z.id).length;
       out.push(h('div', { class: 'card setcard' },
         h('h3', {}, z.title),
         z.description ? h('p', { class: 'hint' }, z.description) : '',
+        open ? h('div', { class: 'note' }, `Masz rozpoczęte podejście (${fmtDT(open.started_at)}): odpowiedzi ${toNum(open.answered)} z ${total}. Możesz je dokończyć.`) : '',
         h('div', { class: 'meta' }, last
           ? `Ukończono: ${done.length}× · ostatni wynik: ${last.correct} z ${toNum(last.correct) + toNum(last.wrong)}` + (toNum(last.manual) ? ` (+${last.manual} do oceny)` : '')
           : 'Jeszcze nie rozwiązywany'),
-        h('div', { class: 'rowbtns' }, h('button', { class: 'primary', type: 'button', onclick: () => startStudentQuiz(z) }, done.length ? 'Rozwiąż ponownie' : 'Rozpocznij'))));
+        h('div', { class: 'rowbtns' }, open
+          ? [h('button', { class: 'primary', type: 'button', onclick: () => startStudentQuiz(z, open.attempt_id) }, 'Kontynuuj'),
+             h('button', { class: 'secondary', type: 'button', onclick: () => { if (confirm('Rozpocząć nowe podejście od początku? Rozpoczęte podejście zostanie w wynikach jako niedokończone.')) startStudentQuiz(z); } }, 'Zacznij od nowa')]
+          : h('button', { class: 'primary', type: 'button', onclick: () => startStudentQuiz(z) }, done.length ? 'Rozwiąż ponownie' : 'Rozpocznij'))));
     });
     if (rs.data.length) {
       out.push(h('h3', {}, 'Moje wyniki'));
