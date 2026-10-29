@@ -465,7 +465,11 @@ const allTags = qs => {
 const nonEmpty = a => (Array.isArray(a) ? a : []).map(s => String(s ?? '').trim()).filter(Boolean);
 
 // ---- podpowiedzi: { text, mini: { prompt, options[], correct } | null } ----
-const blankMini = () => ({ prompt: '', options: ['', ''], correct: null });
+// kind: 'choice' (jednokrotny wybór) albo 'text' (krótka odpowiedź wpisana przez ucznia)
+const blankMini = (kind = 'choice') => ({ kind, prompt: '', options: ['', ''], correct: null, accepted: [''] });
+// Porównanie krótkiej odpowiedzi: bez różnicy wielkości liter i spacji, przecinek = kropka dziesiętna.
+const miniNorm = s => norm(s).replace(/(\d),(\d)/g, '$1.$2');
+const miniTextOk = (mini, v) => !!miniNorm(v) && nonEmpty(mini.accepted).map(miniNorm).includes(miniNorm(v));
 const blankHint = () => ({ text: '', mini: null });
 // Ujednolica podpowiedź (także starą, zapisaną jako zwykły tekst).
 const normHint = x => {
@@ -474,6 +478,8 @@ const normHint = x => {
   return {
     text: String(x && x.text != null ? x.text : ''),
     mini: m && typeof m === 'object' ? {
+      kind: m.kind === 'text' ? 'text' : 'choice',
+      accepted: (Array.isArray(m.accepted) && m.accepted.length ? m.accepted : ['']).map(o => String(o ?? '')),
       prompt: String(m.prompt ?? ''),
       options: (Array.isArray(m.options) ? m.options : []).map(o => String(o ?? '')),
       correct: Number.isInteger(m.correct) ? m.correct : null
@@ -482,7 +488,7 @@ const normHint = x => {
 };
 // Podpowiedzi gotowe dla ucznia: bez pustych (brak tekstu i brak mini-pytania).
 const cleanHints = a => (Array.isArray(a) ? a : []).map(normHint)
-  .map(x => ({ ...x, text: x.text.trim() })).filter(x => x.text || x.mini);
+  .map(x => ({ ...x, text: x.text.trim(), mini: x.mini ? { ...x.mini, accepted: nonEmpty(x.mini.accepted) } : null })).filter(x => x.text || x.mini);
 
 // Lista problemów uniemożliwiających użycie pytania w sprawdzianie.
 function problems(q) {
@@ -534,6 +540,7 @@ function problems(q) {
     const pre = `Podpowiedź ${i + 1}, mini-pytanie: `;
     const mo = Array.isArray(m.options) ? m.options : [];
     if (!String(m.prompt ?? '').trim()) p.push(pre + 'brak treści.');
+    if (m.kind === 'text') { if (!nonEmpty(m.accepted).length) p.push(pre + 'podaj co najmniej jedną poprawną odpowiedź.'); return; }
     if (mo.length < 2 || mo.some(o => !String(o ?? '').trim())) p.push(pre + 'potrzebne co najmniej 2 niepuste odpowiedzi.');
     else if (!(Number.isInteger(m.correct) && m.correct >= 0 && m.correct < mo.length)) p.push(pre + 'zaznacz poprawną odpowiedź.');
   });
@@ -770,6 +777,22 @@ function buildMini(mini, name, qi, hi) {
   (S.mini[qi] ??= [])[hi] = rec;
   const fbm = h('div', { class: 'minifb' });
   const box = h('div', { class: 'mini' }, rich('div', mini.prompt, 'miniq'));
+  if (mini.kind === 'text') {
+    const inp = h('input', { type: 'text', placeholder: 'Krótka odpowiedź', autocomplete: 'off' });
+    const btn = h('button', { class: 'secondary small', type: 'button' }, 'Sprawdź');
+    const check = () => {
+      if (rec.solved || !inp.value.trim()) return;
+      rec.attempts++;
+      if (miniTextOk(mini, inp.value)) {
+        rec.solved = true; inp.disabled = true; btn.disabled = true;
+        fbm.className = 'minifb ok'; fbm.textContent = '✓ Dobrze!';
+      } else { fbm.className = 'minifb bad'; fbm.textContent = '✗ To nie ta odpowiedź – spróbuj jeszcze raz.'; }
+    };
+    btn.onclick = check;
+    inp.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); check(); } });
+    box.append(h('div', { class: 'optrow' }, inp, btn), fbm);
+    return box;
+  }
   mini.options.forEach((o, i) => {
     const inp = h('input', { type: 'radio', name, value: String(i) });
     const lab = h('label', { class: 'opt' }, inp, rich('span', o));
@@ -1153,9 +1176,21 @@ function miniEditor(mini, changed) {
   const name = 'mc' + uid();
   const draw = () => {
     wrap.replaceChildren();
+    const kindSel = h('select');
+    kindSel.append(h('option', { value: 'choice' }, 'Jednokrotny wybór'), h('option', { value: 'text' }, 'Krótka odpowiedź (wpisywana)'));
+    kindSel.value = mini.kind === 'text' ? 'text' : 'choice';
+    kindSel.onchange = () => { mini.kind = kindSel.value; changed(); draw(); };
+    wrap.append(field('Rodzaj mini-pytania', kindSel));
     const pv = previewBox(mini.prompt);
     wrap.append(field('Treść mini-pytania',
       textArea(mini.prompt, v => { mini.prompt = v; setRich(pv, v); changed(); }, 2, 'np. Z którego wzoru należy skorzystać?')), pv);
+    if (mini.kind === 'text') {
+      if (!Array.isArray(mini.accepted)) mini.accepted = [''];
+      wrap.append(field('Akceptowane odpowiedzi (jedna w linii)',
+        textArea(mini.accepted.join('\n'), v => { mini.accepted = v.split('\n'); changed(); }, 3, 'np.\nwzór na kwadrat różnicy'),
+        'Wielkość liter i nadmiarowe spacje nie mają znaczenia, a przecinek dziesiętny jest traktowany jak kropka. Wpisz wszystkie warianty, które uznajesz za poprawne.'));
+      return;
+    }
     mini.options.forEach((o, i) => {
       const mark = h('input', { type: 'radio', name, title: 'Poprawna odpowiedź' });
       mark.checked = mini.correct === i;
@@ -1196,7 +1231,7 @@ function hintsEditor(q) {
       const body = h('div', {}, ta, pv);
       if (hn.mini) {
         body.append(h('div', { class: 'mini-box' },
-          h('div', { class: 'meta' }, 'Mini-pytanie (jednokrotny wybór) – uczeń odpowiada na nie w ramach tej podpowiedzi'),
+          h('div', { class: 'meta' }, 'Mini-pytanie – uczeń odpowiada na nie w ramach tej podpowiedzi'),
           miniEditor(hn.mini, () => { commit(); refreshProblems(); }),
           h('div', { class: 'actions' }, h('button', { class: 'secondary small danger', type: 'button', onclick: () => {
             hn.mini = null; commit(); draw(); refreshProblems();
@@ -1447,7 +1482,7 @@ const setsEl = document.getElementById('sets');
 const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 
-const APP_VERSION = '2026-10-28 · bez prezentacji u ucznia';
+const APP_VERSION = '2026-10-28 · mini-pytania z odpowiedzią wpisywaną';
 document.getElementById('ver').textContent = 'wersja ' + APP_VERSION;
 const ROLE_LABEL = { teacher: 'nauczyciel', student: 'uczeń' };
 const fmtDT = s => (s ? new Date(s).toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' }) : '—');
