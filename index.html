@@ -137,6 +137,7 @@
   .ptitle { margin-bottom: 6px; }
   .pmark { font-size: .85rem; font-weight: 600; margin-top: 4px; } .part.ok .pmark { color: var(--ok); } .part.bad .pmark { color: var(--bad); }
   .pexp { font-size: .9rem; color: var(--muted); margin-top: 2px; }
+  .opt.more { margin: 10px 0 0; font-weight: 600; }
   .tf { display: flex; gap: 18px; flex-wrap: wrap; }
   .phead { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
@@ -1005,6 +1006,15 @@ function showQuestion() {
         ...(q.explanation ? [rich('div', q.explanation)] : []),
         ...(r.extra ? [rich('div', r.extra)] : []));
       T.reveal?.(q, body, r);
+      if (QCTX.onWantMore) {          // prośba ucznia o więcej takich zadań (trafia do wyników)
+        const cb = h('input', { type: 'checkbox' }), st = h('span', { class: 'hint', style: 'margin-left:8px' });
+        cb.addEventListener('change', async () => {
+          st.textContent = 'Zapisywanie…';
+          const okSave = await QCTX.onWantMore(q, cb.checked);
+          st.textContent = okSave ? 'Zapisano ✓' : 'Nie udało się zapisać – spróbuj ponownie.';
+        });
+        fb.after(h('label', { class: 'opt more' }, cb, h('span', {}, 'Chcę więcej takich zadań'), st));
+      }
       btn.textContent = S.i + 1 < QUIZ.length ? 'Dalej' : 'Zobacz wynik';
       // zapis odpowiedzi (tylko w podejściu ucznia): wynik, podpowiedzi i mini-pytania
       QCTX.onAnswer?.({
@@ -1693,7 +1703,7 @@ const setsEl = document.getElementById('sets');
 const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 
-const APP_VERSION = '2026-10-29 · zadania z częściami';
+const APP_VERSION = '2026-10-30 · chcę więcej zadań';
 document.getElementById('ver').textContent = 'wersja ' + APP_VERSION;
 const ROLE_LABEL = { teacher: 'nauczyciel', student: 'uczeń' };
 const fmtDT = s => (s ? new Date(s).toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' }) : '—');
@@ -1846,13 +1856,15 @@ function enterLocal() {
    ========================================================================== */
 function studentCtx(quiz, attemptId) {
   const inflight = [], pending = [];
+  let moreChain = Promise.resolve(true);
   const ctx = {
-    kind: 'student', quiz, attemptId, inflight, pending, resultPromise: null,
+    kind: 'student', quiz, attemptId, inflight, pending, resultPromise: null, more: new Map(),
     onAnswer(p) {
       const row = {
         attempt_id: attemptId, question_id: p.q.id, question_type: p.q.type, question_prompt: p.q.prompt,
         answer: p.value === undefined ? null : p.value, status: p.status,
-        hints_used: p.hintsUsed, hints_total: p.q.hints.length, hint_minis: p.minis, time_spent_s: p.spent
+        hints_used: p.hintsUsed, hints_total: p.q.hints.length, hint_minis: p.minis, time_spent_s: p.spent,
+        wants_more: !!ctx.more.get(p.q.id)
       };
       inflight.push((async () => {
         try {
@@ -1861,9 +1873,23 @@ function studentCtx(quiz, attemptId) {
         } catch (e) { console.warn('Zapis odpowiedzi nie powiódł się:', e); pending.push(row); }
       })());
     },
+    // „Chcę więcej takich zadań”: zapis po zapisaniu odpowiedzi (kolejne zmiany idą jedna po drugiej)
+    onWantMore(q, on) {
+      ctx.more.set(q.id, on);
+      const queued = pending.find(r => r.question_id === q.id);
+      if (queued) queued.wants_more = on;                     // odpowiedź jeszcze nie zapisana – flaga pojedzie razem z nią
+      moreChain = moreChain.then(async () => {
+        await Promise.all(inflight);
+        if (pending.some(r => r.question_id === q.id)) return true;
+        const { error } = await sb.from('answers').update({ wants_more: on }).eq('attempt_id', attemptId).eq('question_id', q.id);
+        if (error) { console.warn('Zapis prośby o więcej zadań nie powiódł się:', error); return false; }
+        return true;
+      }).catch(e => { console.warn(e); return false; });
+      return moreChain;
+    },
     // czeka na zapisy w toku i ponawia nieudane; true, gdy wszystko jest już w bazie
     async flushAnswers() {
-      await Promise.all(inflight);
+      await Promise.all(inflight); await moreChain;
       for (let tries = 0; tries < 2 && pending.length; tries++) {
         const rows = pending.splice(0);
         try {
@@ -2210,7 +2236,7 @@ function setForm() {
 /* ==========================================================================
    NAUCZYCIEL: wyniki uczniów i użyte podpowiedzi
    ========================================================================== */
-const RES = { rows: [], f: { quiz: '', cls: '', q: '', hints: false }, open: null, answers: null };
+const RES = { rows: [], f: { quiz: '', cls: '', q: '', hints: false, more: false }, open: null, answers: null };
 
 async function showResults() {
   resultsEl.replaceChildren(loadingBox());
@@ -2264,7 +2290,7 @@ function answersTable(list) {
     const minis = Array.isArray(a.hint_minis) ? a.hint_minis : [];
     return h('tr', {},
       h('td', {}, String(i + 1)),
-      h('td', {}, plainTitle({ prompt: a.question_prompt })),
+      h('td', {}, plainTitle({ prompt: a.question_prompt }), a.wants_more ? h('div', {}, h('span', { class: 'badge warn' }, '★ chce więcej takich zadań')) : ''),
       h('td', { style: 'white-space:pre-wrap' }, fmtAnswer(a)),
       h('td', {}, h('span', { class: 'badge ' + (a.status === 'correct' ? 'on' : a.status === 'manual' ? 'warn' : '') }, STATUS[a.status] || a.status)),
       h('td', {}, `${toNum(a.hints_used)} z ${toNum(a.hints_total)}`,
@@ -2286,14 +2312,15 @@ function renderResults() {
   const drawTable = () => {
     const rows = RES.rows.filter(r => (!f.quiz || r.quiz_title === f.quiz) && (!f.cls || r.class_name === f.cls)
       && (!f.q || `${r.student_name} ${r.student_login}`.toLowerCase().includes(f.q.toLowerCase()))
-      && (!f.hints || toNum(r.hints_used) > 0));
+      && (!f.hints || toNum(r.hints_used) > 0) && (!f.more || toNum(r.wants_more) > 0));
     tableHolder.replaceChildren(rows.length
-      ? table(['Uczeń', 'Klasa', 'Zestaw', 'Rozpoczęto', 'Status', 'Poprawne', 'Błędne', 'Do oceny', 'Podpowiedzi'], rows.map(r => {
+      ? table(['Uczeń', 'Klasa', 'Zestaw', 'Rozpoczęto', 'Status', 'Poprawne', 'Błędne', 'Do oceny', 'Podpowiedzi', 'Chce więcej'], rows.map(r => {
           const tr = h('tr', { class: 'click' + (RES.open && RES.open.attempt_id === r.attempt_id ? ' sel' : ''), onclick: () => openAttempt(r) },
             h('td', {}, r.student_name || r.student_login || '—'), h('td', {}, r.class_name || '—'), h('td', {}, r.quiz_title),
             h('td', {}, fmtDT(r.started_at)), h('td', {}, r.finished_at ? 'ukończony' : 'w toku'),
             h('td', {}, String(toNum(r.correct))), h('td', {}, String(toNum(r.wrong))), h('td', {}, String(toNum(r.manual))),
-            h('td', {}, `${toNum(r.hints_used)} z ${toNum(r.hints_available)}`));
+            h('td', {}, `${toNum(r.hints_used)} z ${toNum(r.hints_available)}`),
+            h('td', {}, toNum(r.wants_more) ? h('span', { class: 'badge warn' }, '★ ' + toNum(r.wants_more)) : '—'));
           return tr;
         }))
       : h('p', { class: 'hint' }, RES.rows.length ? 'Brak wyników dla wybranych filtrów.' : 'Nikt jeszcze nie rozwiązywał zestawów.'));
@@ -2320,12 +2347,14 @@ function renderResults() {
 
   const qInp = h('input', { type: 'text', placeholder: 'Szukaj ucznia…' }); qInp.value = f.q;
   qInp.addEventListener('input', () => { f.q = qInp.value; drawTable(); });
+  const moreCb = h('input', { type: 'checkbox' }); moreCb.checked = f.more;
+  moreCb.onchange = () => { f.more = moreCb.checked; drawTable(); };
   const hintsCb = h('input', { type: 'checkbox' }); hintsCb.checked = f.hints;
   hintsCb.onchange = () => { f.hints = hintsCb.checked; drawTable(); };
   const filters = h('div', { class: 'filters' },
     mkSel(f.quiz, uniq('quiz_title'), 'Wszystkie zestawy', v => { f.quiz = v; drawTable(); }),
     mkSel(f.cls, uniq('class_name'), 'Wszystkie klasy', v => { f.cls = v; drawTable(); }),
-    qInp, h('label', {}, hintsCb, 'tylko z użytymi podpowiedziami'),
+    qInp, h('label', {}, hintsCb, 'tylko z użytymi podpowiedziami'), h('label', {}, moreCb, 'tylko z prośbą o więcej zadań'),
     h('button', { class: 'secondary small', type: 'button', onclick: showResults }, 'Odśwież'));
   resultsEl.replaceChildren(h('div', { class: 'card' }, filters, tableHolder), detailHolder);
   drawTable(); drawDetail();
