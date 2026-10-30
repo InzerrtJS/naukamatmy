@@ -154,6 +154,8 @@
   .pick { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 6px; margin-bottom: 8px; }
   .pickrow { display: flex; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 8px; }
   .pickrow .t { flex: 1; min-width: 0; }
+  .pickrow .ptxt { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; max-height: 3.6em; line-height: 1.5; }
+  .pickrow .ptxt .katex-display { margin: 0; display: inline-block; }
   .pickrow input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); flex: none; }
   .setcard { margin-bottom: 12px; }
   .setcard h3 { margin: 0 0 4px; }
@@ -1703,7 +1705,7 @@ const setsEl = document.getElementById('sets');
 const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 
-const APP_VERSION = '2026-10-30 · chcę więcej zadań';
+const APP_VERSION = '2026-10-30 · wzory na liście zestawów';
 document.getElementById('ver').textContent = 'wersja ' + APP_VERSION;
 const ROLE_LABEL = { teacher: 'nauczyciel', student: 'uczeń' };
 const fmtDT = s => (s ? new Date(s).toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' }) : '—');
@@ -2085,6 +2087,9 @@ function renderSets() {
   setsEl.replaceChildren(h('div', { class: 'editor' }, list, form));
 }
 
+// Treść pytania ze skompilowanymi wzorami, skrócona do kilku linii (do list wyboru).
+const richTitle = q => rich('span', String(q.prompt || '').replace(/\s*\n\s*/g, ' ').trim() || '(pusta treść)', 'ptxt');
+
 function questionPicker() {
   const c = SETS.cur, wrap = h('div'), box = h('div');
   const tagSel = h('select');
@@ -2101,7 +2106,7 @@ function questionPicker() {
       const dn = h('button', { class: 'secondary small', type: 'button', title: 'Później', onclick: mv(1) }, '↓');
       up.disabled = i === 0; dn.disabled = i === c.qids.length - 1;
       chosen.append(h('div', { class: 'pickrow' }, h('span', {}, `${i + 1}.`),
-        h('span', { class: 't' }, plainTitle(q) + (problems(q).length ? ' ⚠' : '')), up, dn,
+        h('span', { class: 't' }, richTitle(q), problems(q).length ? ' ⚠' : ''), up, dn,
         h('button', { class: 'secondary small danger', type: 'button', title: 'Usuń z zestawu', onclick: () => { c.qids.splice(i, 1); draw(); } }, '✕')));
     });
     const avail = h('div', { class: 'pick' });
@@ -2110,7 +2115,7 @@ function questionPicker() {
     addAll.disabled = !rest.length; addAll.textContent = rest.length ? `+ dodaj wszystkie widoczne (${rest.length})` : '+ dodaj wszystkie widoczne';
     addAll.onclick = () => { rest.forEach(q => c.qids.push(q.id)); draw(); };
     rest.forEach(q => avail.append(h('div', { class: 'pickrow' },
-      h('span', { class: 't' }, plainTitle(q) + (problems(q).length ? ' ⚠' : ''), h('span', { class: 'hint' }, ' – ' + TYPE_LABEL[q.type]),
+      h('span', { class: 't' }, richTitle(q), problems(q).length ? ' ⚠' : '', h('div', { class: 'hint' }, TYPE_LABEL[q.type]),
         (q.tags || []).map(t => h('span', { class: 'chip ro', style: 'margin-left:4px' }, t))),
       h('button', { class: 'secondary small', type: 'button', onclick: () => { c.qids.push(q.id); draw(); } }, '+ dodaj'))));
     box.append(chosen, h('div', { class: 'filters' }, h('span', { class: 'hint' }, 'Dostępne pytania:'), tagSel, addAll), avail);
