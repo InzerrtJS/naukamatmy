@@ -138,6 +138,9 @@
   .pmark { font-size: .85rem; font-weight: 600; margin-top: 4px; } .part.ok .pmark { color: var(--ok); } .part.bad .pmark { color: var(--bad); }
   .pexp { font-size: .9rem; color: var(--muted); margin-top: 2px; }
   .opt.more { margin: 10px 0 0; font-weight: 600; }
+  [hidden] { display: none !important; }
+  .tagfilter { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; margin-bottom: 8px; }
+  .tagfilter select { max-width: 100%; }
   .tf { display: flex; gap: 18px; flex-wrap: wrap; }
   .phead { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
@@ -473,6 +476,12 @@ function normTags(a) {
   return out;
 }
 const sameTag = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
+// Filtr po kilku tagach: mode 'all' = pytanie ma wszystkie wybrane tagi, 'any' = ma którykolwiek z nich.
+const matchesTags = (q, tags, mode) => {
+  if (!tags.length) return true;
+  const has = t => (q.tags || []).some(x => sameTag(x, t));
+  return mode === 'any' ? tags.some(has) : tags.every(has);
+};
 const allTags = qs => {
   const m = new Map();
   qs.forEach(q => (q.tags || []).forEach(t => { const k = t.toLowerCase(); const e = m.get(k); if (e) e.n++; else m.set(k, { tag: t, n: 1 }); }));
@@ -710,8 +719,15 @@ function renderMath(el) {
 }
 // Nowe linie zamieniamy na <br> tylko poza wzorami – wewnątrz $…$ i $$…$$ (np. układ równań w kilku liniach)
 // przerwanie wzoru znacznikiem <br> uniemożliwiłoby jego wyrenderowanie.
-const richHTML = text => String(text ?? '').split(/(\$\$[\s\S]+?\$\$|\$[^$]+?\$)/g)
-  .map((part, i) => (i % 2 ? esc(part) : esc(part).replace(/\n/g, '<br>'))).join('');
+// Wzory ($…$, $$…$$) wyjmujemy na czas formatowania, żeby ich nie ruszać; pogrubienie to **tekst**.
+const richHTML = text => {
+  const maths = [];
+  const masked = String(text ?? '').replace(/\$\$[\s\S]+?\$\$|\$[^$]+?\$/g, m => { maths.push(esc(m)); return '\uE000' + (maths.length - 1) + '\uE001'; });
+  return esc(masked)
+    .replace(/\*\*([^*\n][\s\S]*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>')
+    .replace(/\uE000(\d+)\uE001/g, (_, i) => maths[+i]);
+};
 const setRich = (el, text) => { el.innerHTML = richHTML(text); renderMath(el); };
 const h = (tag, attrs = {}, ...kids) => {
   const e = document.createElement(tag);
@@ -1102,9 +1118,9 @@ document.addEventListener('keydown', e => {
 const editorEl = document.getElementById('editor');
 let sel = null;
 let editorBuilt = false;
-let statusEl, listEl, formEl, filterEl, tagSelEl, textFiltEl, tagToolsEl;
-const EF = { tag: '', text: '' };
-const matchesFilter = q => (!EF.tag || (q.tags || []).some(t => sameTag(t, EF.tag)))
+let statusEl, listEl, formEl, filterEl, tagBoxEl, textFiltEl, tagToolsEl;
+const EF = { tags: [], mode: 'all', text: '' };
+const matchesFilter = q => matchesTags(q, EF.tags, EF.mode)
   && (!EF.text || plainTitle(q).toLowerCase().includes(EF.text.toLowerCase()));
 
 function renameTagEverywhere(from, to) {
@@ -1120,31 +1136,56 @@ function removeTagEverywhere(tag) {
   questions.forEach(q => { const k = (q.tags || []).filter(t => !sameTag(t, tag)); if (k.length !== (q.tags || []).length) { q.tags = k; n++; } });
   return n;
 }
+// Wybór kilku tagów do filtrowania (wspólny dla edytora pytań i składania zestawów).
+function tagFilterBox(state, onChange) {
+  const wrap = h('div', { class: 'tagfilter' });
+  const draw = () => {
+    const all = allTags(questions);
+    state.tags = state.tags.filter(t => all.some(a => sameTag(a.tag, t)));      // usunięty tag znika z filtra
+    const sel = h('select');
+    sel.append(h('option', { value: '' }, state.tags.length ? '+ dodaj kolejny tag' : `Filtruj po tagach (${all.length})…`),
+      ...all.filter(a => !state.tags.some(t => sameTag(t, a.tag))).map(a => h('option', { value: a.tag }, `${a.tag} (${a.n})`)));
+    sel.onchange = () => { if (sel.value) { state.tags.push(sel.value); draw(); onChange(); } };
+    const kids = [];
+    if (state.tags.length) kids.push(h('div', { class: 'chips' }, state.tags.map(t => h('span', { class: 'chip' }, t,
+      h('button', { type: 'button', title: 'Zdejmij z filtra', onclick: () => { state.tags = state.tags.filter(x => x !== t); draw(); onChange(); } }, '✕')))));
+    kids.push(sel);
+    if (state.tags.length > 1) {
+      const ms = h('select');
+      ms.append(h('option', { value: 'all' }, 'mają wszystkie wybrane tagi'), h('option', { value: 'any' }, 'mają którykolwiek z wybranych'));
+      ms.value = state.mode; ms.onchange = () => { state.mode = ms.value; onChange(); };
+      kids.push(ms);
+    }
+    if (state.tags.length) kids.push(h('button', { class: 'secondary small', type: 'button', onclick: () => { state.tags = []; draw(); onChange(); } }, 'Wyczyść filtr'));
+    wrap.replaceChildren(...kids);
+  };
+  draw();
+  wrap.refresh = draw;
+  return wrap;
+}
 function refreshFilterBar() {
-  if (!tagSelEl) return;
-  const tags = allTags(questions);
-  if (EF.tag && !tags.some(t => sameTag(t.tag, EF.tag))) EF.tag = '';
-  tagSelEl.replaceChildren(h('option', { value: '' }, `Wszystkie tagi (${questions.length})`),
-    ...tags.map(t => h('option', { value: t.tag }, `${t.tag} (${t.n})`)));
-  tagSelEl.value = EF.tag;
-  tagToolsEl.hidden = !EF.tag;
+  if (!tagBoxEl) return;
+  tagBoxEl.refresh();
+  tagToolsEl.hidden = EF.tags.length !== 1;               // zmiana nazwy / usunięcie działa na jednym wybranym tagu
 }
 function buildFilterBar() {
-  tagSelEl = h('select'); tagSelEl.onchange = () => { EF.tag = tagSelEl.value; renderList(); };
+  tagBoxEl = tagFilterBox(EF, renderList);
   textFiltEl = h('input', { type: 'text', placeholder: 'Szukaj w treści…' }); textFiltEl.value = EF.text;
   textFiltEl.addEventListener('input', () => { EF.text = textFiltEl.value; renderList(); });
   tagToolsEl = h('div', { class: 'rowbtns', hidden: '' },
     h('button', { class: 'secondary small', type: 'button', onclick: () => {
-      const nv = prompt(`Nowa nazwa tagu „${EF.tag}” (we wszystkich pytaniach):`, EF.tag);
+      const cur = EF.tags[0];
+      const nv = prompt(`Nowa nazwa tagu „${cur}” (we wszystkich pytaniach):`, cur);
       if (nv === null) return;
-      const old = EF.tag; if (!renameTagEverywhere(old, nv)) return;
-      EF.tag = normTags([nv])[0] || ''; commit(); renderForm();
+      if (!renameTagEverywhere(cur, nv)) return;
+      EF.tags = [normTags([nv])[0]]; commit(); renderForm();
     } }, 'Zmień nazwę tagu'),
     h('button', { class: 'secondary small danger', type: 'button', onclick: () => {
-      if (!confirm(`Usunąć tag „${EF.tag}” ze wszystkich pytań? Same pytania zostaną.`)) return;
-      removeTagEverywhere(EF.tag); EF.tag = ''; commit(); renderForm();
+      const cur = EF.tags[0];
+      if (!confirm(`Usunąć tag „${cur}” ze wszystkich pytań? Same pytania zostaną.`)) return;
+      removeTagEverywhere(cur); EF.tags = []; commit(); renderForm();
     } }, 'Usuń tag'));
-  filterEl = h('div', { class: 'card', style: 'padding:10px;margin-bottom:8px' }, tagSelEl, textFiltEl, tagToolsEl);
+  filterEl = h('div', { class: 'card', style: 'padding:10px;margin-bottom:8px' }, tagBoxEl, textFiltEl, tagToolsEl);
 }
 
 function tagsField(q) {
@@ -1176,9 +1217,20 @@ const textInput = (value, onInput, placeholder = '') => {
 };
 const textArea = (value, onInput, rows = 3, placeholder = '') => {
   const t = h('textarea', { rows: String(rows), placeholder }); t.value = value ?? '';
-  t.addEventListener('input', () => onInput(t.value)); return t;
+  t.addEventListener('input', () => onInput(t.value));
+  t.addEventListener('keydown', ev => {       // Ctrl+B / Cmd+B: pogrubienie zaznaczonego tekstu
+    if (!((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'b')) return;
+    ev.preventDefault();
+    const { selectionStart: a, selectionEnd: b, value } = t, sel = value.slice(a, b);
+    const wrapped = sel.startsWith('**') && sel.endsWith('**') && sel.length >= 4;
+    const ins = wrapped ? sel.slice(2, -2) : '**' + sel + '**';
+    t.setRangeText(ins, a, b, 'select');
+    if (!sel && !wrapped) t.setSelectionRange(a + 2, a + 2);
+    t.dispatchEvent(new Event('input'));
+  });
+  return t;
 };
-const plainTitle = q => (String(q.prompt || '').replace(/\$+/g, '').replace(/\s+/g, ' ').trim() || '(pusta treść)');
+const plainTitle = q => (String(q.prompt || '').replace(/\$+/g, '').replace(/\*\*/g, '').replace(/\s+/g, ' ').trim() || '(pusta treść)');
 
 // Stan zapisu pokazywany w pasku narzędzi edytora (ok / saving / error).
 let saveState = { kind: 'idle', text: '' };
@@ -1211,7 +1263,7 @@ function renderList() {
   if (!listEl) return;
   listEl.replaceChildren();
   refreshFilterBar();
-  const filtering = !!(EF.tag || EF.text);
+  const filtering = !!(EF.tags.length || EF.text);
   if (!questions.length) listEl.append(h('p', { class: 'hint' }, 'Brak pytań. Dodaj pierwsze przyciskiem powyżej.'));
   if (questions.length && !questions.some(matchesFilter)) listEl.append(h('p', { class: 'hint' }, 'Żadne pytanie nie pasuje do filtra.'));
   questions.forEach((q, idx) => {
@@ -1542,7 +1594,7 @@ function renderForm() {
 
   const promptPv = previewBox(q.prompt);
   card.append(field(q.type === 'group' ? 'Treść polecenia (wspólna dla wszystkich części)' : q.type === 'truefalse' ? 'Twierdzenie' : 'Treść pytania', textArea(q.prompt, v => { q.prompt = v; setRich(promptPv, v); commit(); refreshProblems(); }, 3),
-    'Wzory wpisuj w LaTeX-u między znakami $, np. $x^2+1$. Poniżej widać podgląd.'), promptPv);
+    'Wzory wpisuj w LaTeX-u między znakami $, np. $x^2+1$. Pogrubienie: **tekst** (lub zaznacz fragment i naciśnij Ctrl+B). Poniżej widać podgląd.'), promptPv);
 
   typeEditor(q, card);
 
@@ -1705,7 +1757,7 @@ const setsEl = document.getElementById('sets');
 const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 
-const APP_VERSION = '2026-10-30 · wzory na liście zestawów';
+const APP_VERSION = '2026-10-31 · pogrubienie tekstu';
 document.getElementById('ver').textContent = 'wersja ' + APP_VERSION;
 const ROLE_LABEL = { teacher: 'nauczyciel', student: 'uczeń' };
 const fmtDT = s => (s ? new Date(s).toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' }) : '—');
@@ -2035,7 +2087,7 @@ async function showHome() {
 /* ==========================================================================
    NAUCZYCIEL: zestawy pytań i przypisywanie uczniom
    ========================================================================== */
-const SETS = { list: [], qq: [], as: [], students: [], cur: null, orig: null, cls: '', flash: '', tag: '' };
+const SETS = { list: [], qq: [], as: [], students: [], cur: null, orig: null, cls: '', flash: '', tf: { tags: [], mode: 'all' } };
 
 async function loadSetsData() {
   const [qz, qq, as, st] = await Promise.all([
@@ -2092,7 +2144,6 @@ const richTitle = q => rich('span', String(q.prompt || '').replace(/\s*\n\s*/g, 
 
 function questionPicker() {
   const c = SETS.cur, wrap = h('div'), box = h('div');
-  const tagSel = h('select');
   const byId = new Map(questions.map(q => [q.id, q]));
   const draw = () => {
     box.replaceChildren();
@@ -2110,20 +2161,17 @@ function questionPicker() {
         h('button', { class: 'secondary small danger', type: 'button', title: 'Usuń z zestawu', onclick: () => { c.qids.splice(i, 1); draw(); } }, '✕')));
     });
     const avail = h('div', { class: 'pick' });
-    const rest = questions.filter(q => !c.qids.includes(q.id) && (!SETS.tag || (q.tags || []).some(t => sameTag(t, SETS.tag))));
-    if (!rest.length) avail.append(h('p', { class: 'hint' }, !questions.length ? 'Brak pytań – dodaj je w zakładce „Pytania”.' : SETS.tag ? 'Brak pytań z tym tagiem poza już wybranymi.' : 'Wszystkie pytania są już w zestawie.'));
+    const rest = questions.filter(q => !c.qids.includes(q.id) && matchesTags(q, SETS.tf.tags, SETS.tf.mode));
+    if (!rest.length) avail.append(h('p', { class: 'hint' }, !questions.length ? 'Brak pytań – dodaj je w zakładce „Pytania”.' : SETS.tf.tags.length ? 'Brak pytań pasujących do filtra poza już wybranymi.' : 'Wszystkie pytania są już w zestawie.'));
     addAll.disabled = !rest.length; addAll.textContent = rest.length ? `+ dodaj wszystkie widoczne (${rest.length})` : '+ dodaj wszystkie widoczne';
     addAll.onclick = () => { rest.forEach(q => c.qids.push(q.id)); draw(); };
     rest.forEach(q => avail.append(h('div', { class: 'pickrow' },
       h('span', { class: 't' }, richTitle(q), problems(q).length ? ' ⚠' : '', h('div', { class: 'hint' }, TYPE_LABEL[q.type]),
         (q.tags || []).map(t => h('span', { class: 'chip ro', style: 'margin-left:4px' }, t))),
       h('button', { class: 'secondary small', type: 'button', onclick: () => { c.qids.push(q.id); draw(); } }, '+ dodaj'))));
-    box.append(chosen, h('div', { class: 'filters' }, h('span', { class: 'hint' }, 'Dostępne pytania:'), tagSel, addAll), avail);
+    box.append(chosen, h('div', { class: 'filters' }, h('span', { class: 'hint' }, 'Dostępne pytania:')), tagBox, h('div', { class: 'filters' }, addAll), avail);
   };
-  tagSel.append(h('option', { value: '' }, 'Wszystkie tagi'), ...allTags(questions).map(t => h('option', { value: t.tag }, `${t.tag} (${t.n})`)));
-  if (!allTags(questions).some(t => sameTag(t.tag, SETS.tag))) SETS.tag = '';
-  tagSel.value = SETS.tag;
-  tagSel.onchange = () => { SETS.tag = tagSel.value; draw(); };
+  const tagBox = tagFilterBox(SETS.tf, () => draw());
   const addAll = h('button', { class: 'secondary small', type: 'button' });
   wrap.append(box);
   draw();
