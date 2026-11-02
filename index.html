@@ -710,11 +710,15 @@ catch (e) { console.warn('Compute Engine niedostępny – porównanie tylko dos�
    POMOCNICZE (DOM)
    ========================================================================== */
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// Skróty KaTeX-a: granice zawsze z wartością pod napisem „lim” (także we wzorach w tekście, między pojedynczymi $).
+const KATEX_MACROS = {};
+// Granice: dolny indeks ma stać POD „lim” także we wzorach w tekście ($…$), a nie obok.
+const fixLimits = m => m.replace(/\\(limsup|liminf|lim)(?![A-Za-z])(?!\s*\\(?:no)?limits)/g, '\\$1\\limits');
 function renderMath(el) {
   if (window.renderMathInElement) {
     window.renderMathInElement(el, {
       delimiters: [{ left: '$$', right: '$$', display: true }, { left: '$', right: '$', display: false }],
-      throwOnError: false
+      throwOnError: false, macros: { ...KATEX_MACROS }
     });
   }
 }
@@ -724,7 +728,7 @@ function renderMath(el) {
 // Formatowanie: **pogrubienie**, *kursywa*, listy punktowane (linie zaczynające się od „- ” lub „* ”).
 const richHTML = text => {
   const maths = [];
-  const masked = String(text ?? '').replace(/\$\$[\s\S]+?\$\$|\$[^$]+?\$/g, m => { maths.push(esc(m)); return '\uE000' + (maths.length - 1) + '\uE001'; });
+  const masked = String(text ?? '').replace(/\$\$[\s\S]+?\$\$|\$[^$]+?\$/g, m => { maths.push(esc(fixLimits(m))); return '\uE000' + (maths.length - 1) + '\uE001'; });
   const inline = esc(masked)
     .replace(/\*\*([^*\n][\s\S]*?)\*\*/g, '<strong>$1</strong>')
     .replace(/(?<![\w*])\*([^*\s](?:[^*\n]*[^*\s])?)\*(?![\w*])/g, '<em>$1</em>');
@@ -1336,7 +1340,7 @@ function mathPreviewLines(text) {
   const box = h('div', { class: 'preview' });
   nonEmpty(text.split('\n')).forEach(line => {
     const row = h('div');
-    if (window.katex) { try { window.katex.render(line, row, { throwOnError: false }); } catch { row.textContent = line; } }
+    if (window.katex) { try { window.katex.render(fixLimits(line), row, { throwOnError: false, macros: { ...KATEX_MACROS } }); } catch { row.textContent = line; } }
     else row.textContent = line;
     box.append(row);
   });
@@ -1768,7 +1772,7 @@ const setsEl = document.getElementById('sets');
 const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 
-const APP_VERSION = '2026-11-02 · kursywa i listy';
+const APP_VERSION = '2026-11-02 · granice pod lim';
 document.getElementById('ver').textContent = 'wersja ' + APP_VERSION;
 const ROLE_LABEL = { teacher: 'nauczyciel', student: 'uczeń' };
 const fmtDT = s => (s ? new Date(s).toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' }) : '—');
