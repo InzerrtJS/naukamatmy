@@ -139,6 +139,7 @@
   .pexp { font-size: .9rem; color: var(--muted); margin-top: 2px; }
   .opt.more { margin: 10px 0 0; font-weight: 600; }
   [hidden] { display: none !important; }
+  ul.rl { margin: 6px 0; padding-left: 22px; } ul.rl li { margin: 2px 0; }
   .tagfilter { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; margin-bottom: 8px; }
   .tagfilter select { max-width: 100%; }
   .tf { display: flex; gap: 18px; flex-wrap: wrap; }
@@ -719,13 +720,21 @@ function renderMath(el) {
 }
 // Nowe linie zamieniamy na <br> tylko poza wzorami – wewnątrz $…$ i $$…$$ (np. układ równań w kilku liniach)
 // przerwanie wzoru znacznikiem <br> uniemożliwiłoby jego wyrenderowanie.
-// Wzory ($…$, $$…$$) wyjmujemy na czas formatowania, żeby ich nie ruszać; pogrubienie to **tekst**.
+// Wzory ($…$, $$…$$) wyjmujemy na czas formatowania, żeby ich nie ruszać.
+// Formatowanie: **pogrubienie**, *kursywa*, listy punktowane (linie zaczynające się od „- ” lub „* ”).
 const richHTML = text => {
   const maths = [];
   const masked = String(text ?? '').replace(/\$\$[\s\S]+?\$\$|\$[^$]+?\$/g, m => { maths.push(esc(m)); return '\uE000' + (maths.length - 1) + '\uE001'; });
-  return esc(masked)
+  const inline = esc(masked)
     .replace(/\*\*([^*\n][\s\S]*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\n/g, '<br>')
+    .replace(/(?<![\w*])\*([^*\s](?:[^*\n]*[^*\s])?)\*(?![\w*])/g, '<em>$1</em>');
+  const out = []; let list = null, prevText = false;
+  for (const line of inline.split('\n')) {
+    const m = /^\s*[-•*]\s+(.*)$/.exec(line);
+    if (m) { if (!list) { list = []; out.push(list); } list.push(m[1]); prevText = false; }
+    else { list = null; if (prevText) out.push('<br>'); out.push(line); prevText = true; }
+  }
+  return out.map(x => (Array.isArray(x) ? '<ul class="rl">' + x.map(li => `<li>${li}</li>`).join('') + '</ul>' : x)).join('')
     .replace(/\uE000(\d+)\uE001/g, (_, i) => maths[+i]);
 };
 const setRich = (el, text) => { el.innerHTML = richHTML(text); renderMath(el); };
@@ -1218,19 +1227,21 @@ const textInput = (value, onInput, placeholder = '') => {
 const textArea = (value, onInput, rows = 3, placeholder = '') => {
   const t = h('textarea', { rows: String(rows), placeholder }); t.value = value ?? '';
   t.addEventListener('input', () => onInput(t.value));
-  t.addEventListener('keydown', ev => {       // Ctrl+B / Cmd+B: pogrubienie zaznaczonego tekstu
-    if (!((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'b')) return;
+  t.addEventListener('keydown', ev => {       // Ctrl+B / Ctrl+I (Cmd na Macu): pogrubienie / kursywa zaznaczonego tekstu
+    if (!(ev.ctrlKey || ev.metaKey)) return;
+    const k = ev.key.toLowerCase();
+    if (k !== 'b' && k !== 'i') return;
     ev.preventDefault();
+    const mark = k === 'b' ? '**' : '*', n = mark.length;
     const { selectionStart: a, selectionEnd: b, value } = t, sel = value.slice(a, b);
-    const wrapped = sel.startsWith('**') && sel.endsWith('**') && sel.length >= 4;
-    const ins = wrapped ? sel.slice(2, -2) : '**' + sel + '**';
-    t.setRangeText(ins, a, b, 'select');
-    if (!sel && !wrapped) t.setSelectionRange(a + 2, a + 2);
+    const wrapped = sel.length >= 2 * n && sel.startsWith(mark) && sel.endsWith(mark) && (k === 'b' || (!sel.startsWith('**') && !sel.endsWith('**')));
+    t.setRangeText(wrapped ? sel.slice(n, -n) : mark + sel + mark, a, b, 'select');
+    if (!sel && !wrapped) t.setSelectionRange(a + n, a + n);
     t.dispatchEvent(new Event('input'));
   });
   return t;
 };
-const plainTitle = q => (String(q.prompt || '').replace(/\$+/g, '').replace(/\*\*/g, '').replace(/\s+/g, ' ').trim() || '(pusta treść)');
+const plainTitle = q => (String(q.prompt || '').replace(/\$+/g, '').replace(/\*/g, '').replace(/\s+/g, ' ').trim() || '(pusta treść)');
 
 // Stan zapisu pokazywany w pasku narzędzi edytora (ok / saving / error).
 let saveState = { kind: 'idle', text: '' };
@@ -1594,7 +1605,7 @@ function renderForm() {
 
   const promptPv = previewBox(q.prompt);
   card.append(field(q.type === 'group' ? 'Treść polecenia (wspólna dla wszystkich części)' : q.type === 'truefalse' ? 'Twierdzenie' : 'Treść pytania', textArea(q.prompt, v => { q.prompt = v; setRich(promptPv, v); commit(); refreshProblems(); }, 3),
-    'Wzory wpisuj w LaTeX-u między znakami $, np. $x^2+1$. Pogrubienie: **tekst** (lub zaznacz fragment i naciśnij Ctrl+B). Poniżej widać podgląd.'), promptPv);
+    'Wzory wpisuj w LaTeX-u między znakami $, np. $x^2+1$. Pogrubienie: **tekst** (Ctrl+B), kursywa: *tekst* (Ctrl+I), lista: linie zaczynające się od „- ”. Poniżej widać podgląd.'), promptPv);
 
   typeEditor(q, card);
 
@@ -1757,7 +1768,7 @@ const setsEl = document.getElementById('sets');
 const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 
-const APP_VERSION = '2026-10-31 · pogrubienie tekstu';
+const APP_VERSION = '2026-11-02 · kursywa i listy';
 document.getElementById('ver').textContent = 'wersja ' + APP_VERSION;
 const ROLE_LABEL = { teacher: 'nauczyciel', student: 'uczeń' };
 const fmtDT = s => (s ? new Date(s).toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' }) : '—');
