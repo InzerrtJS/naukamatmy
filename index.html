@@ -1274,6 +1274,21 @@ function commit() {
   renderList();
 }
 
+// Kopia pytania (treść, odpowiedzi, tagi, podpowiedzi z mini-pytaniami, części zadania) tuż pod oryginałem.
+function duplicateQuestion(q) {
+  const copy = structuredClone(q);
+  copy.id = uid();
+  if (Array.isArray(copy.parts)) copy.parts.forEach(pt => { pt.id = uid(); });
+  const i = questions.indexOf(q);
+  questions.splice(i + 1, 0, copy);
+  sel = copy.id;
+  EF.text = ''; if (textFiltEl) textFiltEl.value = '';          // kopia ma być widoczna na liście
+  if (!matchesFilter(copy)) { EF.tags = []; }
+  commit(); renderForm();
+  const row = listEl && [...listEl.children].find(el => el.classList.contains('sel'));
+  if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
+}
+
 function renderList() {
   if (!listEl) return;
   listEl.replaceChildren();
@@ -1292,6 +1307,7 @@ function renderList() {
     const up = h('button', { class: 'secondary small', type: 'button', title: 'W górę', onclick: move(-1) }, '↑');
     const down = h('button', { class: 'secondary small', type: 'button', title: 'W dół', onclick: move(1) }, '↓');
     up.disabled = filtering || idx === 0; down.disabled = filtering || idx === questions.length - 1;
+    const dup = h('button', { class: 'secondary small', type: 'button', title: 'Duplikuj pytanie', onclick: ev => { ev.stopPropagation(); duplicateQuestion(q); } }, '⧉');
     const del = h('button', { class: 'secondary small danger', type: 'button', title: 'Usuń pytanie', onclick: ev => {
       ev.stopPropagation();
       if (!confirm(MODE === 'cloud' ? 'Usunąć to pytanie z bazy? Zniknie też ze wszystkich zestawów (zapisane wyniki uczniów zostaną).' : 'Usunąć to pytanie?')) return;
@@ -1303,7 +1319,7 @@ function renderList() {
       h('div', { class: 'warn', title: bad ? 'Pytanie wymaga poprawek' : '' }, bad ? '⚠' : ''),
       h('div', { class: 't' }, h('b', {}, `${idx + 1}. ${plainTitle(q)}`), h('span', {}, TYPE_LABEL[q.type]),
         (q.tags || []).length ? h('div', { class: 'tg' }, q.tags.map(t => h('span', { class: 'chip ro' }, t))) : ''),
-      up, down, del));
+      up, down, dup, del));
   });
 }
 
@@ -1621,7 +1637,8 @@ function renderForm() {
     textArea(q.explanation, v => { q.explanation = v; setRich(exPv, v); commit(); }, 3)), exPv);
 
   card.append(h('div', { class: 'actions' },
-    h('button', { class: 'primary', type: 'button', onclick: () => tryQuestion(q) }, 'Wypróbuj w sprawdzianie')));
+    h('button', { class: 'primary', type: 'button', onclick: () => tryQuestion(q) }, 'Wypróbuj w sprawdzianie'),
+    h('button', { class: 'secondary', type: 'button', onclick: () => duplicateQuestion(q) }, 'Duplikuj to pytanie')));
   formEl.append(card);
   refreshProblems();
 }
