@@ -191,6 +191,7 @@
   <section id="sets" hidden></section>
   <section id="results" hidden></section>
   <section id="students" hidden></section>
+  <section id="reports" hidden></section>
 </main>
 
 <script type="module">
@@ -977,6 +978,29 @@ function recallHints(qid) {
   try { return Number(JSON.parse(localStorage.getItem(hintMemoKey()) || '{}')[qid]) || 0; } catch (e) { return 0; }
 }
 
+// „Zgłoś problem” przy pytaniu (tylko w podejściu ucznia): przycisk rozwija pole na opis problemu.
+function reportWidget(q) {
+  const wrap = h('div', { style: 'margin-top:14px' });
+  const open = h('button', { class: 'secondary small', type: 'button' }, '⚑ Zgłoś problem z tym pytaniem');
+  const ta = h('textarea', { rows: '3', maxlength: '2000', placeholder: 'Opisz, na czym polega problem (np. błąd w treści, niepoprawna odpowiedź, coś się nie wyświetla)' });
+  const msg = h('div', { class: 'minifb' });
+  const send = h('button', { class: 'secondary small', type: 'button', style: 'font-weight:600' }, 'Wyślij zgłoszenie');
+  const cancel = h('button', { class: 'secondary small', type: 'button' }, 'Anuluj');
+  const box = h('div', { class: 'mini-box', hidden: '' }, ta, h('div', { class: 'phead', style: 'margin:8px 0 0' }, send, cancel), msg);
+  open.onclick = () => { box.hidden = false; open.hidden = true; ta.focus(); };
+  cancel.onclick = () => { box.hidden = true; open.hidden = false; msg.textContent = ''; };
+  send.onclick = async () => {
+    if (!ta.value.trim()) { msg.className = 'minifb bad'; msg.textContent = 'Opisz problem własnymi słowami.'; return; }
+    send.disabled = true; msg.className = 'minifb'; msg.textContent = 'Wysyłanie…';
+    const r = await QCTX.onReport(q, ta.value);
+    if (r.ok) { box.hidden = true; ta.value = ''; open.hidden = false; open.disabled = false; open.textContent = '⚑ Zgłoś kolejny problem'; wrap.append(h('div', { class: 'minifb ok' }, '✓ Dziękujemy, zgłoszenie zostało wysłane do nauczyciela.')); }
+    else { msg.className = 'minifb bad'; msg.textContent = 'Nie udało się wysłać: ' + r.error; }
+    send.disabled = false;
+  };
+  wrap.append(open, box);
+  return wrap;
+}
+
 function showQuestion() {
   quizEl.replaceChildren();
   if (!QUIZ.length) {
@@ -1021,7 +1045,7 @@ function showQuestion() {
   const card = h('div', { class: 'card' },
     h('div', { class: 'meta' }, `Pytanie ${S.i + 1} z ${QUIZ.length}`,
       QCTX.attemptId ? h('button', { class: 'secondary small', type: 'button', style: 'float:right', title: 'Zapisz postęp i wróć do listy zestawów – możesz dokończyć później', onclick: () => QCTX.onPause() }, '⏸ Wstrzymaj i wyjdź') : ''),
-    rich('div', q.prompt, 'prompt'), body, ...hintArea, fb, btn);
+    rich('div', q.prompt, 'prompt'), body, ...hintArea, fb, btn, QCTX.onReport ? reportWidget(q) : '');
   quizEl.append(h('div', { class: 'bar' }, h('div', { style: `width:${(S.i / QUIZ.length) * 100}%` })), card);
   const get = T.build(q, body);
   const qStart = Date.now();
@@ -1788,6 +1812,7 @@ const homeEl = document.getElementById('home');
 const setsEl = document.getElementById('sets');
 const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
+const reportsEl = document.getElementById('reports');
 
 const APP_VERSION = '2026-11-02 · granice pod lim';
 document.getElementById('ver').textContent = 'wersja ' + APP_VERSION;
@@ -1825,7 +1850,8 @@ const VIEWS = {
   editor: { el: editorEl, wide: true, show() { if (!editorBuilt) buildEditor(); renderList(); renderForm(); } },
   sets: { el: setsEl, wide: true, show: showSets },
   results: { el: resultsEl, wide: true, show: showResults },
-  students: { el: studentsEl, wide: true, show: showStudents }
+  students: { el: studentsEl, wide: true, show: showStudents },
+  reports: { el: reportsEl, wide: true, show: showReports }
 };
 
 function activateTab(t) {
@@ -1910,8 +1936,9 @@ async function enterApp(user) {
   if (ME.role === 'teacher') {
     try { await loadCloudQuestions(); } catch (e) { await signOutQuiet(); return showLogin(friendlyError(e)); }
     sel = questions[0]?.id ?? null;
-    setNav([['editor', 'Pytania'], ['sets', 'Zestawy'], ['results', 'Wyniki'], ['students', 'Uczniowie'], ['quiz', 'Podgląd'], ['slides', 'Prezentacja']]);
+    setNav([['editor', 'Pytania'], ['sets', 'Zestawy'], ['results', 'Wyniki'], ['reports', 'Zgłoszenia'], ['students', 'Uczniowie'], ['quiz', 'Podgląd'], ['slides', 'Prezentacja']]);
     activateTab('editor');
+    refreshReportBadge();
   } else {
     setNav([['home', 'Moje zestawy']]);
     activateTab('home');
@@ -1958,6 +1985,17 @@ function studentCtx(quiz, attemptId) {
           if (error) throw error;
         } catch (e) { console.warn('Zapis odpowiedzi nie powiódł się:', e); pending.push(row); }
       })());
+    },
+    // Zgłoszenie problemu z pytaniem (trafia do zakładki „Zgłoszenia” nauczyciela)
+    async onReport(q, message) {
+      try {
+        const { error } = await sb.from('reports').insert({
+          question_id: q.id, attempt_id: attemptId, message: message.trim().slice(0, 2000),
+          question_prompt: String(q.prompt || '').slice(0, 1000)
+        });
+        if (error) throw error;
+        return { ok: true };
+      } catch (e) { return { ok: false, error: friendlyError(e) }; }
     },
     // „Chcę więcej takich zadań”: zapis po zapisaniu odpowiedzi (kolejne zmiany idą jedna po drugiej)
     onWantMore(q, on) {
@@ -2580,6 +2618,79 @@ function renderStudents() {
   out.push(h('div', { class: 'card' }, rows.length ? table(['Login', 'Imię i nazwisko', 'Klasa', 'Aktywny', '', ''], rows)
     : h('p', { class: 'hint' }, 'Nie ma jeszcze żadnych uczniów. Dodaj pierwszych powyżej.')));
   studentsEl.replaceChildren(...out);
+}
+
+/* ==========================================================================
+   NAUCZYCIEL: zgłoszenia problemów od uczniów
+   ========================================================================== */
+const REP = { rows: [], names: new Map(), filter: 'new' };
+
+async function refreshReportBadge() {
+  if (MODE !== 'cloud' || !ME || ME.role !== 'teacher') return;
+  try {
+    const r = await sb.from('reports').select('id').eq('status', 'new');
+    if (r.error) throw r.error;
+    const b = navEl.querySelector('button[data-tab=reports]');
+    if (b) b.textContent = r.data.length ? `Zgłoszenia (${r.data.length})` : 'Zgłoszenia';
+  } catch (e) { console.warn('Licznik zgłoszeń niedostępny:', e); }
+}
+
+async function showReports() {
+  reportsEl.replaceChildren(loadingBox());
+  try {
+    const [r, st] = await Promise.all([
+      sb.from('reports').select('*').order('created_at', { ascending: false }).limit(500),
+      sb.from('profiles').select('id,full_name,login,class_name').eq('role', 'student')
+    ]);
+    if (r.error) throw r.error;
+    if (st.error) throw st.error;
+    REP.rows = r.data; REP.names = new Map(st.data.map(x => [x.id, x]));
+    if (!questions.length) await loadCloudQuestions();     // potrzebne do sprawdzenia, czy pytanie jeszcze istnieje
+  } catch (e) { reportsEl.replaceChildren(errBox(e)); return; }
+  renderReports();
+  refreshReportBadge();
+}
+
+function goToQuestion(id) {
+  sel = id; EF.tags = []; EF.text = ''; if (textFiltEl) textFiltEl.value = '';
+  activateTab('editor');
+  const row = listEl && [...listEl.children].find(el => el.classList.contains('sel'));
+  if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
+}
+
+function renderReports() {
+  const rows = REP.rows.filter(x => REP.filter === 'all' || x.status === 'new');
+  const fsel = h('select');
+  fsel.append(h('option', { value: 'new' }, `Nowe (${REP.rows.filter(x => x.status === 'new').length})`), h('option', { value: 'all' }, `Wszystkie (${REP.rows.length})`));
+  fsel.value = REP.filter; fsel.onchange = () => { REP.filter = fsel.value; renderReports(); };
+  const out = [h('div', { class: 'filters' }, fsel, h('button', { class: 'secondary small', type: 'button', onclick: showReports }, 'Odśwież'))];
+  if (!rows.length) out.push(h('div', { class: 'card' }, h('p', { class: 'hint' }, REP.rows.length ? 'Brak nowych zgłoszeń.' : 'Uczniowie nie zgłosili jeszcze żadnych problemów.')));
+  rows.forEach(rp => {
+    const stu = REP.names.get(rp.student_id), exists = rp.question_id && questions.some(q => q.id === rp.question_id);
+    const st = h('span', { class: 'hint' });
+    const go = h('button', { class: 'primary small', type: 'button', onclick: () => goToQuestion(rp.question_id) }, 'Przejdź do pytania');
+    if (!exists) { go.disabled = true; go.title = 'Pytanie zostało usunięte'; }
+    const toggle = h('button', { class: 'secondary small', type: 'button', onclick: async () => {
+      const upd = rp.status === 'new' ? { status: 'resolved', resolved_at: new Date().toISOString() } : { status: 'new', resolved_at: null };
+      st.textContent = 'Zapisywanie…';
+      const u = await sb.from('reports').update(upd).eq('id', rp.id);
+      if (u.error) { st.textContent = 'Błąd: ' + friendlyError(u.error); return; }
+      Object.assign(rp, upd); renderReports(); refreshReportBadge();
+    } }, rp.status === 'new' ? 'Oznacz jako rozwiązane' : 'Otwórz ponownie');
+    const del = h('button', { class: 'secondary small danger', type: 'button', onclick: async () => {
+      if (!confirm('Usunąć to zgłoszenie?')) return;
+      const d = await sb.from('reports').delete().eq('id', rp.id);
+      if (d.error) { st.textContent = 'Błąd: ' + friendlyError(d.error); return; }
+      REP.rows = REP.rows.filter(x => x.id !== rp.id); renderReports(); refreshReportBadge();
+    } }, 'Usuń');
+    out.push(h('div', { class: 'card' },
+      h('div', { class: 'meta' }, `${stu ? (stu.full_name || stu.login) + (stu.class_name ? ' · ' + stu.class_name : '') : 'uczeń'} · ${fmtDT(rp.created_at)} · `,
+        h('span', { class: 'badge ' + (rp.status === 'new' ? 'warn' : 'on') }, rp.status === 'new' ? 'nowe' : 'rozwiązane')),
+      h('div', { class: 'hint' }, 'Pytanie:'), rich('div', rp.question_prompt || '(brak treści)', 'ptxt'),
+      h('div', { class: 'note', style: 'margin-top:10px;white-space:pre-wrap' }, rp.message),
+      h('div', { class: 'phead', style: 'margin:0' }, go, toggle, del, st)));
+  });
+  reportsEl.replaceChildren(...out);
 }
 
 /* ==========================================================================
