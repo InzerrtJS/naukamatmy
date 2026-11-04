@@ -139,6 +139,8 @@
   .pexp { font-size: .9rem; color: var(--muted); margin-top: 2px; }
   .opt.more { margin: 10px 0 0; font-weight: 600; }
   [hidden] { display: none !important; }
+  details.catbox { margin: 10px 0; padding-left: 12px; border-left: 3px solid var(--line); }
+  details.catbox > summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
   ul.rl { margin: 6px 0; padding-left: 22px; } ul.rl li { margin: 2px 0; }
   .tagfilter { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; margin-bottom: 8px; }
   .tagfilter select { max-width: 100%; }
@@ -2092,6 +2094,43 @@ async function startStudentQuiz(quiz, resumeId = null) {
   }
 }
 
+/* ==========================================================================
+   KATEGORIE ZESTAWÓW (drzewo)
+   ========================================================================== */
+// Dzieci każdej kategorii (klucz null = poziom główny), posortowane po kolejności i nazwie.
+function catChildren(cats) {
+  const ids = new Set(cats.map(c => c.id)), m = new Map();
+  cats.forEach(c => { const k = c.parent_id && ids.has(c.parent_id) ? c.parent_id : null; (m.get(k) || m.set(k, []).get(k)).push(c); });
+  m.forEach(a => a.sort((x, y) => (x.position - y.position) || String(x.name).localeCompare(String(y.name), 'pl')));
+  return m;
+}
+// Lista płaska w kolejności drzewa: [{ cat, depth }].
+function catFlat(cats, exclude = new Set()) {
+  const ch = catChildren(cats), out = [];
+  const walk = (parent, depth) => (ch.get(parent) || []).forEach(c => { if (exclude.has(c.id)) return; out.push({ cat: c, depth }); walk(c.id, depth + 1); });
+  walk(null, 0);
+  return out;
+}
+const catDescendants = (cats, id) => {
+  const ch = catChildren(cats), out = new Set([id]);
+  const walk = p => (ch.get(p) || []).forEach(c => { out.add(c.id); walk(c.id); });
+  walk(id);
+  return out;
+};
+const catPath = (cats, id) => {
+  const by = new Map(cats.map(c => [c.id, c])), names = [];
+  for (let c = by.get(id), n = 0; c && n < 20; c = by.get(c.parent_id), n++) names.unshift(c.name);
+  return names.join(' › ');
+};
+// <select> z kategoriami z wcięciami; exclude = identyfikatory, których nie wolno wybrać.
+function catSelect(cats, value, emptyLabel, exclude) {
+  const sel = h('select');
+  sel.append(h('option', { value: '' }, emptyLabel));
+  catFlat(cats, exclude).forEach(({ cat, depth }) => sel.append(h('option', { value: cat.id }, '\u00A0\u00A0'.repeat(depth) + (depth ? '↳ ' : '') + cat.name)));
+  sel.value = value || '';
+  return sel;
+}
+
 async function openMyAttempt(r, box) {
   box.replaceChildren(h('div', { class: 'card detail' }, loadingBox()));
   const a = await sb.from('answers').select('*').eq('attempt_id', r.attempt_id).order('created_at', { ascending: true });
@@ -2112,23 +2151,25 @@ async function openMyAttempt(r, box) {
 async function showHome() {
   homeEl.replaceChildren(loadingBox());
   try {
-    const [qz, rs, qc] = await Promise.all([
-      sb.from('quizzes').select('id,title,description,mode').order('created_at', { ascending: false }),
+    const [qz, rs, qc, ct] = await Promise.all([
+      sb.from('quizzes').select('id,title,description,mode,category_id').order('created_at', { ascending: false }),
       sb.from('results_overview').select('*').order('started_at', { ascending: false }),
-      sb.from('quiz_questions').select('quiz_id,question_id')
+      sb.from('quiz_questions').select('quiz_id,question_id'),
+      sb.from('categories').select('id,name,parent_id,position')
     ]);
     if (qz.error) throw qz.error;
     if (rs.error) throw rs.error;
     if (qc.error) throw qc.error;
+    if (ct.error) throw ct.error;
     const out = [h('h2', { style: 'margin-top:0' }, `Cześć${ME.full_name ? ', ' + ME.full_name : ''}!`)];
     if (!qz.data.length) out.push(h('div', { class: 'note' }, 'Nie masz jeszcze przypisanych zestawów. Poproś nauczyciela o udostępnienie zestawu.'));
-    qz.data.forEach(z => {
+    const setCard = z => {
       const done = rs.data.filter(r => r.quiz_id === z.id && r.finished_at);
       const last = done[0];
       const newest = rs.data.find(r => r.quiz_id === z.id);                       // najnowsze podejście (lista jest posortowana malejąco)
       const open = newest && !newest.finished_at ? newest : null;                  // niedokończone = można kontynuować
       const total = qc.data.filter(r => r.quiz_id === z.id).length;
-      out.push(h('div', { class: 'card setcard' },
+      return h('div', { class: 'card setcard' },
         h('h3', {}, z.title),
         z.description ? h('p', { class: 'hint' }, z.description) : '',
         open ? h('div', { class: 'note' }, `Masz rozpoczęte podejście (${fmtDT(open.started_at)}): odpowiedzi ${toNum(open.answered)} z ${total}. Możesz je dokończyć.`) : '',
@@ -2138,8 +2179,27 @@ async function showHome() {
         h('div', { class: 'rowbtns' }, open
           ? [h('button', { class: 'primary', type: 'button', onclick: () => startStudentQuiz(z, open.attempt_id) }, 'Kontynuuj'),
              h('button', { class: 'secondary', type: 'button', onclick: () => { if (confirm('Rozpocząć nowe podejście od początku? Rozpoczęte podejście zostanie w wynikach jako niedokończone.')) startStudentQuiz(z); } }, 'Zacznij od nowa')]
-          : h('button', { class: 'primary', type: 'button', onclick: () => startStudentQuiz(z) }, done.length ? 'Rozwiąż ponownie' : 'Rozpocznij'))));
-    });
+          : h('button', { class: 'primary', type: 'button', onclick: () => startStudentQuiz(z) }, done.length ? 'Rozwiąż ponownie' : 'Rozpocznij')));
+    };
+    // zestawy pogrupowane w kategorie i podkategorie (rozwijane); bez kategorii – na końcu
+    const cats = ct.data, ch = catChildren(cats), inCat = new Map();
+    qz.data.forEach(z => { const k = cats.some(c => c.id === z.category_id) ? z.category_id : null; (inCat.get(k) || inCat.set(k, []).get(k)).push(z); });
+    const countIn = id => [...catDescendants(cats, id)].reduce((n, c) => n + (inCat.get(c) || []).length, 0);
+    const memo = { get: id => { try { return sessionStorage.getItem('quiz:cat:' + id) !== '0'; } catch (e) { return true; } },
+                   set: (id, v) => { try { sessionStorage.setItem('quiz:cat:' + id, v ? '1' : '0'); } catch (e) { /* brak */ } } };
+    const drawCat = c => {
+      if (!countIn(c.id)) return '';
+      const d = h('details', { class: 'catbox' }, h('summary', {}, `📁 ${c.name} `, h('span', { class: 'hint' }, `(${countIn(c.id)})`)),
+        ...(inCat.get(c.id) || []).map(setCard), ...(ch.get(c.id) || []).map(drawCat));
+      d.open = memo.get(c.id);
+      d.addEventListener('toggle', () => memo.set(c.id, d.open));
+      return d;
+    };
+    if (!cats.length) qz.data.forEach(z => out.push(setCard(z)));
+    else {
+      (ch.get(null) || []).forEach(c => out.push(drawCat(c)));
+      if ((inCat.get(null) || []).length) out.push(h('details', { class: 'catbox', open: '' }, h('summary', {}, '📂 Bez kategorii'), ...inCat.get(null).map(setCard)));
+    }
     if (rs.data.length) {
       out.push(h('h3', {}, 'Moje wyniki'));
       const detail = h('div');
@@ -2157,18 +2217,20 @@ async function showHome() {
 /* ==========================================================================
    NAUCZYCIEL: zestawy pytań i przypisywanie uczniom
    ========================================================================== */
-const SETS = { list: [], qq: [], as: [], students: [], cur: null, orig: null, cls: '', flash: '', tf: { tags: [], mode: 'all' } };
+const SETS = { list: [], qq: [], as: [], students: [], cur: null, curCat: null, cats: [], orig: null, cls: '', flash: '', tf: { tags: [], mode: 'all' } };
 
 async function loadSetsData() {
-  const [qz, qq, as, st] = await Promise.all([
-    sb.from('quizzes').select('id,title,description,mode,published,created_at').order('created_at', { ascending: false }),
+  const [qz, qq, as, st, ct] = await Promise.all([
+    sb.from('quizzes').select('id,title,description,mode,published,category_id,created_at').order('created_at', { ascending: false }),
     sb.from('quiz_questions').select('quiz_id,question_id,position'),
     sb.from('assignments').select('quiz_id,student_id'),
     sb.from('profiles').select('id,full_name,login,class_name,active').eq('role', 'student')
-      .order('class_name', { ascending: true }).order('full_name', { ascending: true })
+      .order('class_name', { ascending: true }).order('full_name', { ascending: true }),
+    sb.from('categories').select('id,name,parent_id,position')
   ]);
-  for (const r of [qz, qq, as, st]) if (r.error) throw r.error;
-  Object.assign(SETS, { list: qz.data, qq: qq.data, as: as.data, students: st.data });
+  for (const r of [qz, qq, as, st, ct]) if (r.error) throw r.error;
+  Object.assign(SETS, { list: qz.data, qq: qq.data, as: as.data, students: st.data, cats: ct.data });
+  if (SETS.curCat && SETS.curCat.id && !SETS.cats.some(c => c.id === SETS.curCat.id)) SETS.curCat = null;
   if (SETS.cur && SETS.cur.id && !SETS.list.some(z => z.id === SETS.cur.id)) SETS.cur = null;
 }
 
@@ -2182,31 +2244,118 @@ async function showSets() {
   renderSets();
 }
 
-function openSet(id) {
+function openSet(id, category = '') {
   const z = id ? SETS.list.find(x => x.id === id) : null;
+  SETS.curCat = null;
   SETS.cur = z
-    ? { id: z.id, title: z.title, description: z.description || '', mode: z.mode, published: z.published,
+    ? { id: z.id, category: z.category_id || '', title: z.title, description: z.description || '', mode: z.mode, published: z.published,
         qids: SETS.qq.filter(r => r.quiz_id === id).sort((a, b) => a.position - b.position).map(r => r.question_id),
         sids: new Set(SETS.as.filter(r => r.quiz_id === id).map(r => r.student_id)) }
-    : { id: null, title: '', description: '', mode: 'practice', published: false, qids: [], sids: new Set() };
+    : { id: null, category, title: '', description: '', mode: 'practice', published: false, qids: [], sids: new Set() };
   SETS.orig = { qids: [...SETS.cur.qids], sids: new Set(SETS.cur.sids) };
+  renderSets();
+}
+
+function openCategory(id, parent = '') {
+  SETS.cur = null;
+  const c = id ? SETS.cats.find(x => x.id === id) : null;
+  SETS.curCat = c ? { id: c.id, name: c.name, parent_id: c.parent_id || '' } : { id: null, name: '', parent_id: parent };
   renderSets();
 }
 
 function renderSets() {
   const list = h('div', { class: 'qlist' });
-  list.append(h('button', { class: 'primary', type: 'button', onclick: () => openSet(null) }, '+ Nowy zestaw'));
-  if (!SETS.list.length) list.append(h('p', { class: 'hint' }, 'Brak zestawów. Utwórz pierwszy.'));
-  SETS.list.forEach(z => {
+  list.append(h('div', { class: 'phead' },
+    h('button', { class: 'primary', type: 'button', onclick: () => openSet(null) }, '+ Nowy zestaw'),
+    h('button', { class: 'secondary', type: 'button', onclick: () => openCategory(null) }, '+ Kategoria')));
+  if (!SETS.list.length && !SETS.cats.length) list.append(h('p', { class: 'hint' }, 'Brak zestawów. Utwórz pierwszy.'));
+  const setRow = (z, depth) => {
     const nq = SETS.qq.filter(r => r.quiz_id === z.id).length, ns = SETS.as.filter(r => r.quiz_id === z.id).length;
-    list.append(h('div', { class: 'qrow' + (SETS.cur && SETS.cur.id === z.id ? ' sel' : ''), onclick: () => openSet(z.id) },
+    return h('div', { class: 'qrow' + (SETS.cur && SETS.cur.id === z.id ? ' sel' : ''), style: `margin-left:${depth * 14}px`, onclick: () => openSet(z.id) },
       h('div', { class: 't' }, h('b', {}, z.title || '(bez nazwy)'), h('span', {}, `${nq} pytań · ${ns} uczniów`)),
-      h('span', { class: 'badge ' + (z.published ? 'on' : '') }, z.published ? 'opublikowany' : 'szkic')));
-  });
+      h('span', { class: 'badge ' + (z.published ? 'on' : '') }, z.published ? 'opublikowany' : 'szkic'));
+  };
+  const byCat = new Map();
+  SETS.list.forEach(z => { const k = SETS.cats.some(c => c.id === z.category_id) ? z.category_id : null; (byCat.get(k) || byCat.set(k, []).get(k)).push(z); });
+  const ch = catChildren(SETS.cats);
+  const drawCat = (c, depth) => {
+    const n = [...catDescendants(SETS.cats, c.id)].reduce((a, id) => a + (byCat.get(id) || []).length, 0);
+    list.append(h('div', { class: 'qrow' + (SETS.curCat && SETS.curCat.id === c.id ? ' sel' : ''), style: `margin-left:${depth * 14}px;background:var(--bg)`, onclick: () => openCategory(c.id) },
+      h('div', { class: 't' }, h('b', {}, '📁 ' + c.name), h('span', {}, `${n} zestawów`)),
+      h('span', { class: 'badge' }, 'kategoria')));
+    (byCat.get(c.id) || []).forEach(z => list.append(setRow(z, depth + 1)));
+    (ch.get(c.id) || []).forEach(sub => drawCat(sub, depth + 1));
+  };
+  (ch.get(null) || []).forEach(c => drawCat(c, 0));
+  if (SETS.cats.length && (byCat.get(null) || []).length) list.append(h('div', { class: 'hint', style: 'margin-top:8px' }, '📂 Bez kategorii'));
+  (byCat.get(null) || []).forEach(z => list.append(setRow(z, 0)));
   const form = h('div');
   if (SETS.cur) form.append(setForm());
-  else form.append(h('div', { class: 'card' }, h('p', { class: 'hint' }, 'Wybierz zestaw z listy albo utwórz nowy.')));
+  else if (SETS.curCat) form.append(categoryForm());
+  else form.append(h('div', { class: 'card' }, h('p', { class: 'hint' }, 'Wybierz zestaw lub kategorię z listy albo utwórz nowe.')));
   setsEl.replaceChildren(h('div', { class: 'editor' }, list, form));
+}
+
+function categoryForm() {
+  const c = SETS.curCat;
+  const msg = h('div', { class: 'note', hidden: '' });
+  const say = (t, k = '') => { msg.hidden = !t; msg.className = 'note ' + k; msg.textContent = t || ''; };
+  const card = h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, c.id ? 'Kategoria' : 'Nowa kategoria'), msg);
+  card.append(field('Nazwa', textInput(c.name, v => { c.name = v; }, 'np. Funkcje')));
+  const exclude = c.id ? catDescendants(SETS.cats, c.id) : new Set();
+  const parent = catSelect(SETS.cats, c.parent_id, '(brak – kategoria główna)', exclude);
+  parent.onchange = () => { c.parent_id = parent.value; };
+  card.append(field('Leży w kategorii', parent, 'Dzięki temu tworzysz podkategorie. Uczniowie widzą drzewo kategorii, ale tylko gałęzie, w których mają przypisane zestawy.'));
+  const save = h('button', { class: 'primary', type: 'button' }, 'Zapisz kategorię');
+  save.onclick = async () => {
+    const name = c.name.trim();
+    if (!name) { say('Podaj nazwę kategorii.', 'bad'); return; }
+    save.disabled = true; say('Zapisywanie…');
+    try {
+      const parent_id = c.parent_id || null;
+      if (c.id) {
+        const old = SETS.cats.find(x => x.id === c.id);
+        const upd = { name, parent_id };
+        if ((old.parent_id || null) !== parent_id) upd.position = Math.max(-1, ...SETS.cats.filter(x => (x.parent_id || null) === parent_id).map(x => x.position)) + 1;   // przeniesiona – na koniec nowej gałęzi
+        const r = await sb.from('categories').update(upd).eq('id', c.id); if (r.error) throw r.error;
+      } else {
+        const position = Math.max(-1, ...SETS.cats.filter(x => (x.parent_id || null) === parent_id).map(x => x.position)) + 1;
+        const r = await sb.from('categories').insert({ name, parent_id, position }).select('id').single(); if (r.error) throw r.error;
+        c.id = r.data.id;
+      }
+      await loadSetsData(); SETS.flash = 'Kategoria zapisana.'; openCategory(c.id);
+    } catch (e) { save.disabled = false; say('Nie udało się zapisać: ' + friendlyError(e), 'bad'); }
+  };
+  const btns = h('div', { class: 'rowbtns' }, save);
+  if (c.id) {
+    const sibs = catFlat(SETS.cats).map(x => x.cat).filter(x => (x.parent_id || null) === (c.parent_id || null));
+    const idx = sibs.findIndex(x => x.id === c.id);
+    const move = d => async () => {
+      const arr = sibs.slice(); [arr[idx], arr[idx + d]] = [arr[idx + d], arr[idx]];
+      try {
+        for (let i = 0; i < arr.length; i++) if (arr[i].position !== i) { const r = await sb.from('categories').update({ position: i }).eq('id', arr[i].id); if (r.error) throw r.error; }
+        await loadSetsData(); openCategory(c.id);
+      } catch (e) { say('Nie udało się zmienić kolejności: ' + friendlyError(e), 'bad'); }
+    };
+    const up = h('button', { class: 'secondary', type: 'button', onclick: move(-1) }, '↑ Wyżej'); up.disabled = idx <= 0;
+    const dn = h('button', { class: 'secondary', type: 'button', onclick: move(1) }, '↓ Niżej'); dn.disabled = idx < 0 || idx >= sibs.length - 1;
+    btns.append(up, dn,
+      h('button', { class: 'secondary', type: 'button', onclick: () => openCategory(null, c.id) }, '+ Podkategoria'),
+      h('button', { class: 'secondary', type: 'button', onclick: () => openSet(null, c.id) }, '+ Zestaw tutaj'),
+      h('button', { class: 'secondary danger', type: 'button', onclick: async () => {
+        const up_ = SETS.cats.find(x => x.id === c.id).parent_id || null;
+        if (!confirm(`Usunąć kategorię „${c.name}”? Jej podkategorie i zestawy nie znikną – przejdą poziom wyżej${up_ ? '' : ' (zestawy trafią do „Bez kategorii”)'}.`)) return;
+        try {
+          let r = await sb.from('categories').update({ parent_id: up_ }).eq('parent_id', c.id); if (r.error) throw r.error;
+          r = await sb.from('quizzes').update({ category_id: up_ }).eq('category_id', c.id); if (r.error) throw r.error;
+          r = await sb.from('categories').delete().eq('id', c.id); if (r.error) throw r.error;
+          SETS.curCat = null; await loadSetsData(); renderSets();
+        } catch (e) { say('Nie udało się usunąć: ' + friendlyError(e), 'bad'); }
+      } }, 'Usuń kategorię'));
+  }
+  card.append(btns);
+  if (SETS.flash) { say(SETS.flash, 'good'); SETS.flash = ''; }
+  return card;
 }
 
 // Treść pytania ze skompilowanymi wzorami, skrócona do kilku linii (do list wyboru).
@@ -2280,7 +2429,7 @@ function studentPicker() {
 }
 
 async function saveSet(c, orig) {
-  const base = { title: c.title.trim(), description: c.description.trim(), mode: c.mode, published: !!c.published };
+  const base = { title: c.title.trim(), description: c.description.trim(), mode: c.mode, published: !!c.published, category_id: c.category || null };
   let id = c.id;
   if (!id) {
     const r = await sb.from('quizzes').insert(base).select('id').single();
@@ -2323,6 +2472,9 @@ function setForm() {
   const modeSel = h('select');
   [['practice', 'Ćwiczenie'], ['test', 'Sprawdzian']].forEach(([k, v]) => modeSel.append(h('option', { value: k }, v)));
   modeSel.value = c.mode; modeSel.onchange = () => { c.mode = modeSel.value; };
+  const catSel = catSelect(SETS.cats, c.category, '(bez kategorii)', new Set());
+  catSel.onchange = () => { c.category = catSel.value; };
+  card.append(field('Kategoria', catSel, SETS.cats.length ? '' : 'Kategorie tworzysz przyciskiem „+ Kategoria” nad listą zestawów.'));
   card.append(field('Rodzaj', modeSel, 'Na razie oba rodzaje działają tak samo: odpowiedzi ocenia przeglądarka ucznia.'));
   const pub = h('input', { type: 'checkbox' }); pub.checked = !!c.published; pub.onchange = () => { c.published = pub.checked; };
   card.append(h('label', { class: 'opt' }, pub, h('span', {}, 'Opublikowany – przypisani uczniowie widzą ten zestaw')));
