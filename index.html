@@ -2197,6 +2197,10 @@ async function showHome() {
     };
     if (!cats.length) qz.data.forEach(z => out.push(setCard(z)));
     else {
+      const setAll = v => homeEl.querySelectorAll('details.catbox').forEach(d => { d.open = v; });
+      out.push(h('div', { class: 'phead' },
+        h('button', { class: 'secondary small', type: 'button', onclick: () => setAll(false) }, '▸ Zwiń wszystkie'),
+        h('button', { class: 'secondary small', type: 'button', onclick: () => setAll(true) }, '▾ Rozwiń wszystkie')));
       (ch.get(null) || []).forEach(c => out.push(drawCat(c)));
       if ((inCat.get(null) || []).length) out.push(h('details', { class: 'catbox', open: '' }, h('summary', {}, '📂 Bez kategorii'), ...inCat.get(null).map(setCard)));
     }
@@ -2253,13 +2257,26 @@ function openSet(id, category = '') {
         sids: new Set(SETS.as.filter(r => r.quiz_id === id).map(r => r.student_id)) }
     : { id: null, category, title: '', description: '', mode: 'practice', published: false, qids: [], sids: new Set() };
   SETS.orig = { qids: [...SETS.cur.qids], sids: new Set(SETS.cur.sids) };
+  if (SETS.cur.category) revealCategory(SETS.cur.category);
   renderSets();
+}
+
+// Zwinięte kategorie na liście zestawów (zapamiętywane w tej przeglądarce).
+const COLL_KEY = 'quiz:sets:collapsed';
+const collapsedCats = (() => { try { return new Set(JSON.parse(localStorage.getItem(COLL_KEY) || '[]')); } catch (e) { return new Set(); } })();
+const saveCollapsed = () => { try { localStorage.setItem(COLL_KEY, JSON.stringify([...collapsedCats])); } catch (e) { /* brak localStorage */ } };
+// Rozwija kategorię i jej przodków, żeby wybrany element był widoczny.
+function revealCategory(id) {
+  const by = new Map(SETS.cats.map(c => [c.id, c]));
+  for (let c = by.get(id), n = 0; c && n < 20; c = by.get(c.parent_id), n++) collapsedCats.delete(c.id);
+  saveCollapsed();
 }
 
 function openCategory(id, parent = '') {
   SETS.cur = null;
   const c = id ? SETS.cats.find(x => x.id === id) : null;
   SETS.curCat = c ? { id: c.id, name: c.name, parent_id: c.parent_id || '' } : { id: null, name: '', parent_id: parent };
+  if (c) revealCategory(c.id); else if (parent) revealCategory(parent);
   renderSets();
 }
 
@@ -2268,6 +2285,9 @@ function renderSets() {
   list.append(h('div', { class: 'phead' },
     h('button', { class: 'primary', type: 'button', onclick: () => openSet(null) }, '+ Nowy zestaw'),
     h('button', { class: 'secondary', type: 'button', onclick: () => openCategory(null) }, '+ Kategoria')));
+  if (SETS.cats.length) list.append(h('div', { class: 'phead' },
+    h('button', { class: 'secondary small', type: 'button', onclick: () => { SETS.cats.forEach(c => collapsedCats.add(c.id)); saveCollapsed(); renderSets(); } }, '▸ Zwiń wszystkie'),
+    h('button', { class: 'secondary small', type: 'button', onclick: () => { collapsedCats.clear(); saveCollapsed(); renderSets(); } }, '▾ Rozwiń wszystkie')));
   if (!SETS.list.length && !SETS.cats.length) list.append(h('p', { class: 'hint' }, 'Brak zestawów. Utwórz pierwszy.'));
   const setRow = (z, depth) => {
     const nq = SETS.qq.filter(r => r.quiz_id === z.id).length, ns = SETS.as.filter(r => r.quiz_id === z.id).length;
@@ -2280,9 +2300,14 @@ function renderSets() {
   const ch = catChildren(SETS.cats);
   const drawCat = (c, depth) => {
     const n = [...catDescendants(SETS.cats, c.id)].reduce((a, id) => a + (byCat.get(id) || []).length, 0);
+    const closed = collapsedCats.has(c.id), hasKids = n > 0 || (ch.get(c.id) || []).length > 0;
+    const arrow = h('button', { class: 'secondary small', type: 'button', title: closed ? 'Rozwiń' : 'Zwiń', 'aria-expanded': String(!closed),
+      onclick: ev => { ev.stopPropagation(); if (closed) collapsedCats.delete(c.id); else collapsedCats.add(c.id); saveCollapsed(); renderSets(); } }, closed ? '▸' : '▾');
+    arrow.disabled = !hasKids;
     list.append(h('div', { class: 'qrow' + (SETS.curCat && SETS.curCat.id === c.id ? ' sel' : ''), style: `margin-left:${depth * 14}px;background:var(--bg)`, onclick: () => openCategory(c.id) },
-      h('div', { class: 't' }, h('b', {}, '📁 ' + c.name), h('span', {}, `${n} zestawów`)),
+      arrow, h('div', { class: 't' }, h('b', {}, '📁 ' + c.name), h('span', {}, `${n} zestawów`)),
       h('span', { class: 'badge' }, 'kategoria')));
+    if (closed) return;
     (byCat.get(c.id) || []).forEach(z => list.append(setRow(z, depth + 1)));
     (ch.get(c.id) || []).forEach(sub => drawCat(sub, depth + 1));
   };
