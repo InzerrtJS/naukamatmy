@@ -171,6 +171,12 @@
   .grade { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
   .grade input[type=number] { width: 90px; }
   .grade textarea { flex: 1; min-width: 160px; }
+  .qnav { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .qchips { display: flex; gap: 4px; flex-wrap: wrap; flex: 1; justify-content: center; }
+  .qchip { min-width: 2em; padding: 4px 6px; font-size: .85rem; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--text); cursor: pointer; }
+  .qchip.correct { background: var(--ok-bg); border-color: var(--ok); } .qchip.wrong { background: var(--bad-bg); border-color: var(--bad); }
+  .qchip.manual { background: var(--info-bg); border-color: var(--info); }
+  .qchip.cur { outline: 2px solid var(--accent); font-weight: 700; }
   .sumrow { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--line); }
   .sumrow .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sumrow .st { font-size: .85rem; white-space: nowrap; }
@@ -899,7 +905,8 @@ const quizEl = document.getElementById('quiz');
 // (docelowo ta informacja trafi razem z identyfikatorem ucznia do bazy danych)
 // S.mini[i][k] = { attempts, solved } dla mini-pytania w k-tej podpowiedzi pytania i
 const S = { i: 0, res: [], hints: [], mini: [] };
-const resetSession = (i = 0) => { S.i = i; S.res = []; S.hints = []; S.mini = []; };
+const QCARDS = [];   // zbudowane karty pytań (odpowiedzi, podpowiedzi i ocena zostają przy przechodzeniu tam i z powrotem)
+const resetSession = (i = 0) => { S.i = i; S.res = []; S.hints = []; S.mini = []; QCARDS.length = 0; };
 
 // Mini-pytanie jednokrotnego wyboru wewnątrz podpowiedzi: od razu mówi, czy odpowiedź jest dobra.
 function buildMini(mini, name, qi, hi) {
@@ -1003,18 +1010,23 @@ function reportWidget(q) {
   return wrap;
 }
 
-function showQuestion() {
-  quizEl.replaceChildren();
-  if (!QUIZ.length) {
-    quizEl.append(h('div', { class: 'card' },
-      h('p', {}, QCTX.kind === 'student'
-        ? 'Ten zestaw nie ma jeszcze pytań gotowych do rozwiązania.'
-        : 'Brak pytań gotowych do użycia. Dodaj je lub popraw w edytorze pytań.')));
-    return;
+// Karta jednego pytania (budowana raz, potem tylko pokazywana ponownie).
+function buildCard(qi) {
+  const q = QUIZ[qi], T = TYPES[q.type];
+  const timer = { acc: 0, t0: null };
+  const pauseBtn = () => QCTX.attemptId ? h('button', { class: 'secondary small', type: 'button', style: 'float:right', title: 'Zapisz postęp i wróć do listy zestawów – możesz dokończyć później', onclick: () => QCTX.onPause() }, '⏸ Wstrzymaj i wyjdź') : '';
+  const meta = () => h('div', { class: 'meta' }, `Pytanie ${qi + 1} z ${QUIZ.length}`, pauseBtn());
+  const api = { timer, enter() { timer.t0 = Date.now(); }, leave() { if (timer.t0) timer.acc += Date.now() - timer.t0; timer.t0 = null; } };
+
+  // pytanie rozwiązane przed pauzą: tylko podgląd zapisanego wyniku
+  const old = QCTX.done?.get(q.id);
+  if (old) {
+    api.el = h('div', { class: 'card' }, meta(), rich('div', q.prompt, 'prompt'),
+      h('div', { class: 'feedback ' + old.status }, h('strong', {}, LABEL[old.status] || 'Odpowiedź zapisana'),
+        h('div', { class: 'hint' }, 'To pytanie zostało rozwiązane przed wstrzymaniem testu.')));
+    return api;
   }
-  while (QCTX.done && S.i < QUIZ.length && QCTX.done.has(QUIZ[S.i].id)) S.i++;   // pomiń pytania rozwiązane przed pauzą
-  if (S.i >= QUIZ.length) return showSummary();
-  const q = QUIZ[S.i], T = TYPES[q.type];
+
   const body = h('div', { class: 'body' });
   const fb = h('div', { class: 'feedback', hidden: '' });
   const btn = h('button', { class: 'primary' }, 'Sprawdź');
@@ -1023,17 +1035,17 @@ function showQuestion() {
   const hintList = h('div', { class: 'hintlist' });
   const hintBtn = h('button', { class: 'secondary', type: 'button' });
   let used = 0;
-  S.hints[S.i] = 0;
+  S.hints[qi] = 0;
   const syncHintBtn = () => {
     hintBtn.textContent = `💡 Pokaż podpowiedź ${used + 1} z ${q.hints.length}`;
     hintBtn.hidden = used >= q.hints.length;
   };
   hintBtn.onclick = () => {
-    used++; S.hints[S.i] = used;
+    used++; S.hints[qi] = used;
     const hn = q.hints[used - 1];
     const item = h('div', { class: 'hintitem' }, h('b', {}, `Podpowiedź ${used}` + (hn.text ? ': ' : '')));
     if (hn.text) item.append(rich('span', hn.text));
-    if (hn.mini) item.append(buildMini(hn.mini, `${q.id}-h${used}`, S.i, used - 1));
+    if (hn.mini) item.append(buildMini(hn.mini, `${q.id}-h${used}`, qi, used - 1));
     hintList.append(item);
     syncHintBtn();
     memoHints(q.id, used);
@@ -1044,19 +1056,15 @@ function showQuestion() {
   for (let k = 0; k < Math.min(memo, q.hints.length); k++) hintBtn.onclick();
   const hintArea = q.hints.length ? [hintList, h('div', { class: 'hintctl' }, hintBtn)] : [];
 
-  const card = h('div', { class: 'card' },
-    h('div', { class: 'meta' }, `Pytanie ${S.i + 1} z ${QUIZ.length}`,
-      QCTX.attemptId ? h('button', { class: 'secondary small', type: 'button', style: 'float:right', title: 'Zapisz postęp i wróć do listy zestawów – możesz dokończyć później', onclick: () => QCTX.onPause() }, '⏸ Wstrzymaj i wyjdź') : ''),
+  api.el = h('div', { class: 'card' }, meta(),
     rich('div', q.prompt, 'prompt'), body, ...hintArea, fb, btn, QCTX.onReport ? reportWidget(q) : '');
-  quizEl.append(h('div', { class: 'bar' }, h('div', { style: `width:${(S.i / QUIZ.length) * 100}%` })), card);
   const get = T.build(q, body);
-  const qStart = Date.now();
   let checked = false;
   btn.onclick = () => {
     if (!checked) {
       const value = get();
       const r = T.grade(q, value);
-      S.res[S.i] = r.status; checked = true; lock(body); hintBtn.hidden = true;
+      S.res[qi] = r.status; checked = true; lock(body); hintBtn.hidden = true;
       hintList.querySelectorAll('input').forEach(d => { d.disabled = true; });
       fb.className = 'feedback ' + r.status; fb.hidden = false;
       fb.replaceChildren(h('strong', {}, LABEL[r.status]),
@@ -1072,26 +1080,79 @@ function showQuestion() {
         });
         fb.after(h('label', { class: 'opt more' }, cb, h('span', {}, 'Chcę więcej takich zadań'), st));
       }
-      btn.textContent = S.i + 1 < QUIZ.length ? 'Dalej' : 'Zobacz wynik';
+      btn.textContent = qi + 1 < QUIZ.length ? 'Dalej' : 'Zakończ test';
       // zapis odpowiedzi (tylko w podejściu ucznia): wynik, podpowiedzi i mini-pytania
       QCTX.onAnswer?.({
         q, value: T.pack ? T.pack(q, value, r) : value, status: r.status, hintsUsed: used,
-        minis: (S.mini[S.i] || []).map((m, k) => (m ? { hint: k + 1, attempts: m.attempts, solved: m.solved } : null)).filter(Boolean),
-        spent: Math.round((Date.now() - qStart) / 1000)
+        minis: (S.mini[qi] || []).map((m, k) => (m ? { hint: k + 1, attempts: m.attempts, solved: m.solved } : null)).filter(Boolean),
+        spent: Math.round((timer.acc + (timer.t0 ? Date.now() - timer.t0 : 0)) / 1000)
       });
-    } else { S.i++; showQuestion(); }
+      renderNav();
+    } else if (qi + 1 < QUIZ.length) goTo(qi + 1);
+    else finishQuiz();
   };
+  return api;
+}
+
+function goTo(i) {
+  if (i < 0 || i >= QUIZ.length) return;
+  QCARDS[S.i]?.leave();
+  S.i = i; showQuestion();
+}
+
+// Pasek nawigacji: poprzednie / numery pytań / następne / zakończ (odpowiadanie nie jest wymagane).
+let qnavEl = null;
+function renderNav() {
+  if (!qnavEl) return;
+  const n = QUIZ.length;
+  qnavEl.replaceChildren(
+    Object.assign(h('button', { class: 'secondary small', type: 'button', onclick: () => goTo(S.i - 1) }, '← Poprzednie'), { disabled: S.i === 0 }),
+    h('span', { class: 'qchips' }, QUIZ.map((q, i) => h('button', {
+      type: 'button', class: 'qchip' + (i === S.i ? ' cur' : '') + (S.res[i] ? ' ' + S.res[i] : ''),
+      title: `Pytanie ${i + 1}` + (S.res[i] ? ': ' + LABEL[S.res[i]] : ': bez odpowiedzi'), onclick: () => goTo(i)
+    }, String(i + 1)))),
+    Object.assign(h('button', { class: 'secondary small', type: 'button', onclick: () => goTo(S.i + 1) }, 'Następne →'), { disabled: S.i >= n - 1 }),
+    h('button', { class: 'secondary small', type: 'button', onclick: () => finishQuiz() }, 'Zakończ test'));
+  const pct = document.querySelector('#quiz .bar > div');
+  if (pct) pct.style.width = (S.res.filter(Boolean).length / n * 100) + '%';
+}
+
+function finishQuiz() {
+  const skipped = QUIZ.map((q, i) => (S.res[i] ? 0 : i + 1)).filter(Boolean);
+  if (skipped.length && !confirm(`Pytania bez odpowiedzi: ${skipped.join(', ')}.\nZostaną policzone jako niepoprawne. Zakończyć test?`)) return;
+  QCARDS[S.i]?.leave();
+  quizEl.replaceChildren();
+  showSummary();
+}
+
+function showQuestion() {
+  quizEl.replaceChildren();
+  qnavEl = null;
+  if (!QUIZ.length) {
+    quizEl.append(h('div', { class: 'card' },
+      h('p', {}, QCTX.kind === 'student'
+        ? 'Ten zestaw nie ma jeszcze pytań gotowych do rozwiązania.'
+        : 'Brak pytań gotowych do użycia. Dodaj je lub popraw w edytorze pytań.')));
+    return;
+  }
+  if (S.i >= QUIZ.length) return showSummary();
+  const card = QCARDS[S.i] ??= buildCard(S.i);
+  qnavEl = h('div', { class: 'qnav' });
+  quizEl.append(h('div', { class: 'bar' }, h('div', {})), qnavEl, card.el);
+  renderNav();
+  card.enter();
 }
 
 function showSummary() {
-  const graded = S.res.filter(r => r !== 'manual').length;
+  const manual = S.res.filter(r => r === 'manual').length;
+  const graded = QUIZ.length - manual;                      // pominięte pytania liczą się jako niepoprawne
   const ok = S.res.filter(r => r === 'correct').length;
-  const manual = S.res.length - graded;
+  const skipped = QUIZ.map((q, i) => i).filter(i => !S.res[i]);
   const hintsUsed = S.hints.reduce((a, b) => a + (b || 0), 0);
   const hintsAll = QUIZ.reduce((a, q) => a + q.hints.length, 0);
   const rows = QUIZ.map((q, i) => h('div', { class: 'sumrow' },
     h('span', { class: 't' }, `${i + 1}. ${plainTitle(q)}`),
-    h('span', { class: 'st ' + S.res[i] }, { correct: '✓', wrong: '✗', manual: 'do oceny' }[S.res[i]] || ''),
+    h('span', { class: 'st ' + (S.res[i] || 'wrong') }, { correct: '✓', wrong: '✗', manual: 'do oceny' }[S.res[i]] || 'pominięte'),
     h('span', { class: 'hn2' }, q.hints.length
       ? `💡 ${S.hints[i] || 0}/${q.hints.length}` + (q.hints.some(x => x.mini)
         ? ` · mini ${(S.mini[i] || []).filter(m => m && m.solved).length}/${q.hints.filter(x => x.mini).length}` : '')
@@ -1103,6 +1164,14 @@ function showSummary() {
   const saveNote = h('p', { class: 'hint' });
   const saveWrap = h('div');
   if (student) {
+    if (!QCTX.skippedSent) {             // pominięte pytania zapisujemy jako niepoprawne (bez odpowiedzi)
+      QCTX.skippedSent = true;
+      skipped.forEach(i => QCTX.onAnswer({
+        q: QUIZ[i], value: null, status: 'wrong', hintsUsed: S.hints[i] || 0,
+        minis: (S.mini[i] || []).map((m, k) => (m ? { hint: k + 1, attempts: m.attempts, solved: m.solved } : null)).filter(Boolean),
+        spent: Math.round((QCARDS[i]?.timer.acc || 0) / 1000)
+      }));
+    }
     const doSave = () => {
       saveWrap.replaceChildren(h('p', { class: 'hint' }, 'Zapisywanie wyniku…'));
       QCTX.onFinish().then(res => {
@@ -1117,6 +1186,7 @@ function showSummary() {
     h('h2', { style: 'margin-top:0' }, 'Wynik'),
     h('div', { class: 'score' }, `${ok} / ${graded}`),
     h('p', {}, manual ? `Pytania otwarte czekające na ocenę nauczyciela: ${manual}.` : 'Wszystkie pytania zostały ocenione automatycznie.'),
+    ...(skipped.length ? [h('p', {}, `Pytania pominięte (liczone jako niepoprawne): ${skipped.map(i => i + 1).join(', ')}.`)] : []),
     ...(hintsAll ? [h('p', {}, `Wykorzystane podpowiedzi: ${hintsUsed} z ${hintsAll}.`)] : []),
     ...(minis.length ? [h('p', {}, `Mini-pytania w podpowiedziach: rozwiązane ${minis.filter(m => m.solved).length} z ${minis.length} odsłoniętych, łącznie prób: ${minis.reduce((a, m) => a + m.attempts, 0)}.`)] : []),
     h('div', { style: 'margin-bottom:16px' }, rows),
@@ -1816,7 +1886,7 @@ const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 const reportsEl = document.getElementById('reports');
 
-const APP_VERSION = '2026-11-02 · granice pod lim';
+const APP_VERSION = '2026-11-06 · nawigacja po pytaniach';
 document.getElementById('ver').textContent = 'wersja ' + APP_VERSION;
 const ROLE_LABEL = { teacher: 'nauczyciel', student: 'uczeń' };
 const fmtDT = s => (s ? new Date(s).toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' }) : '—');
@@ -2088,6 +2158,8 @@ async function startStudentQuiz(quiz, resumeId = null) {
       S.res[i] = a.status; S.hints[i] = a.hints_used || 0;
       (Array.isArray(a.hint_minis) ? a.hint_minis : []).forEach(m => { (S.mini[i] ??= [])[m.hint - 1] = { attempts: m.attempts, solved: !!m.solved }; });
     });
+    const first = QUIZ.findIndex(q => !done.has(q.id));
+    S.i = first < 0 ? QUIZ.length : first;      // wznowienie: zacznij od pierwszego nierozwiązanego pytania
     showQuestion();
   } catch (e) {
     quizEl.replaceChildren(errBox(e), h('button', { class: 'secondary', type: 'button', onclick: () => activateTab('home') }, 'Wróć do listy zestawów'));
