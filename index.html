@@ -18,12 +18,20 @@
     --line: #dde1e8; --accent: #2457d6; --ok: #1c7c4a; --ok-bg: #e6f4ec;
     --bad: #b3261e; --bad-bg: #fbe9e7; --info: #7a5b00; --info-bg: #fff4d6;
   }
+  :root { color-scheme: light; }
   @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
       --bg: #14171d; --card: #1c212b; --text: #e8ebf1; --muted: #98a2b5;
       --line: #313846; --accent: #7aa2ff; --ok: #6fd39b; --ok-bg: #16301f;
       --bad: #ff8f86; --bad-bg: #3a1c1a; --info: #f0cf6a; --info-bg: #35290d;
     }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #14171d; --card: #1c212b; --text: #e8ebf1; --muted: #98a2b5;
+    --line: #313846; --accent: #7aa2ff; --ok: #6fd39b; --ok-bg: #16301f;
+    --bad: #ff8f86; --bad-bg: #3a1c1a; --info: #f0cf6a; --info-bg: #35290d;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
@@ -117,6 +125,7 @@
   .mini-box { margin-top: 8px; padding: 12px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; }
   .mini-box .field { margin-bottom: 8px; }
   /* ---- logowanie, tabele, widoki nauczyciela i ucznia ---- */
+  header #themebtn { flex: none; }
   header .userbox { display: flex; gap: 10px; align-items: center; font-size: .9rem; color: var(--muted); margin-left: auto; }
   .login { max-width: 380px; margin: 40px auto 12px; }
   .login h2 { margin-top: 0; }
@@ -189,6 +198,7 @@
   <h1>Quiz <small id="ver" style="font-size:.5em;font-weight:400;opacity:.6"></small></h1>
   <nav id="nav"></nav>
   <div class="userbox" id="userbox"></div>
+  <button class="secondary small" id="themebtn" type="button"></button>
 </header>
 <main>
   <section id="login" hidden></section>
@@ -1886,7 +1896,25 @@ const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 const reportsEl = document.getElementById('reports');
 
-const APP_VERSION = '2026-11-06 · nawigacja po pytaniach';
+const APP_VERSION = '2026-11-06 · tryb ciemny';
+// Motyw: auto (jak system) → jasny → ciemny; wybór pamiętany w przeglądarce
+{
+  const KEY = 'quiz-theme', btn = document.getElementById('themebtn');
+  const MODES = ['auto', 'light', 'dark'], LBL = { auto: '🌓 Auto', light: '☀️ Jasny', dark: '🌙 Ciemny' };
+  let mode = 'auto';
+  try { const v = localStorage.getItem(KEY); if (MODES.includes(v)) mode = v; } catch (e) {}
+  const apply = () => {
+    if (mode === 'auto') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', mode);
+    btn.textContent = LBL[mode]; btn.title = 'Motyw: ' + LBL[mode].slice(3) + ' (kliknij, aby zmienić)';
+  };
+  btn.onclick = () => {
+    mode = MODES[(MODES.indexOf(mode) + 1) % MODES.length];
+    try { localStorage.setItem(KEY, mode); } catch (e) {}
+    apply();
+  };
+  apply();
+}
 document.getElementById('ver').textContent = 'wersja ' + APP_VERSION;
 const ROLE_LABEL = { teacher: 'nauczyciel', student: 'uczeń' };
 const fmtDT = s => (s ? new Date(s).toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' }) : '—');
