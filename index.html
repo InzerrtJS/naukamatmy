@@ -186,6 +186,22 @@
   .qchip.correct { background: var(--ok-bg); border-color: var(--ok); } .qchip.wrong { background: var(--bad-bg); border-color: var(--bad); }
   .qchip.manual { background: var(--info-bg); border-color: var(--info); }
   .qchip.cur { outline: 2px solid var(--accent); font-weight: 700; }
+  .pbar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; margin: 6px 0 2px; }
+  .pbar > div { height: 100%; background: var(--accent); }
+  .pbar.ok > div { background: var(--ok); }
+  .stats { margin-top: 14px; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .stat .big { font-size: 1.6rem; font-weight: 700; line-height: 1.2; }
+  .act { display: flex; gap: 4px; align-items: flex-end; height: 110px; }
+  .act .col { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; min-width: 0; }
+  .act .cbar { width: 100%; background: var(--line); border-radius: 3px 3px 0 0; }
+  .act .cbar.on { background: var(--accent); }
+  .act .hint { font-size: .7rem; margin-top: 2px; }
+  .achs { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .ach { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; align-items: start; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; opacity: .72; }
+  .ach .icon { grid-row: 1 / span 3; font-size: 2rem; line-height: 1.1; }
+  .ach > div:nth-child(n+3) { grid-column: 2; }
+  .ach.got { opacity: 1; border-color: var(--ok); background: var(--ok-bg); }
   .sumrow { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--line); }
   .sumrow .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sumrow .st { font-size: .85rem; white-space: nowrap; }
@@ -203,6 +219,7 @@
 <main>
   <section id="login" hidden></section>
   <section id="home" hidden></section>
+  <section id="profile" hidden></section>
   <section id="quiz" hidden></section>
   <section id="slides" hidden></section>
   <section id="editor" hidden></section>
@@ -664,6 +681,74 @@ function normalizeImported(raw, usedIds) {
   if (!q.id || usedIds.has(q.id)) q.id = uid();
   usedIds.add(q.id);
   return q;
+}
+
+/* --- profil ucznia: statystyki i osiągnięcia liczone z zapisanych podejść --- */
+const dayKey = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const scoreOf = r => { const g = (Number(r.correct) || 0) + (Number(r.wrong) || 0); return g ? (Number(r.correct) || 0) / g : null; };
+// rows: wiersze results_overview ucznia; quizzes: zestawy dostępne dla ucznia
+function computeProfile(rows, quizzes, now = new Date()) {
+  const n = v => Number(v) || 0;
+  const all = rows.slice().sort((a, b) => String(a.started_at).localeCompare(String(b.started_at)));
+  const fin = all.filter(r => r.finished_at);
+  const perSet = quizzes.map(z => {
+    const mine = all.filter(r => r.quiz_id === z.id), done = mine.filter(r => r.finished_at);
+    const scores = done.map(scoreOf).filter(x => x !== null);
+    const newest = mine[mine.length - 1];
+    return { quiz: z, attempts: mine.length, finished: done.length,
+      best: scores.length ? Math.max(...scores) : null, bestRow: done.slice().sort((a, b) => (scoreOf(b) ?? -1) - (scoreOf(a) ?? -1))[0] || null,
+      open: newest && !newest.finished_at ? newest : null, last: done[done.length - 1] || null };
+  });
+  const totals = all.reduce((t, r) => ({ answered: t.answered + n(r.answered), correct: t.correct + n(r.correct), wrong: t.wrong + n(r.wrong),
+    manual: t.manual + n(r.manual), hints: t.hints + n(r.hints_used) }), { answered: 0, correct: 0, wrong: 0, manual: 0, hints: 0 });
+  const graded = totals.correct + totals.wrong;
+  // dni aktywności i serie
+  const perDay = new Map();
+  all.forEach(r => { if (n(r.answered) > 0 && r.started_at) { const k = dayKey(new Date(r.started_at)); perDay.set(k, (perDay.get(k) || 0) + n(r.answered)); } });
+  const back = (d, k) => { const x = new Date(d); x.setDate(x.getDate() - k); return x; };
+  let current = 0;
+  for (let k = perDay.has(dayKey(now)) ? 0 : 1; perDay.has(dayKey(back(now, k))); k++) current++;
+  let best = 0, run = 0, prev = null;
+  [...perDay.keys()].sort().forEach(k => {
+    const d = new Date(k + 'T12:00:00');
+    run = prev && dayKey(back(d, 1)) === prev ? run + 1 : 1; prev = k; best = Math.max(best, run);
+  });
+  const last14 = Array.from({ length: 14 }, (_, i) => { const k = dayKey(back(now, 13 - i)); return { key: k, n: perDay.get(k) || 0 }; });
+  // „poprawa”: późniejsze podejście do tego samego zestawu z lepszym wynikiem niż wszystkie wcześniejsze
+  const improved = perSet.some(ps => {
+    const sc = fin.filter(r => r.quiz_id === ps.quiz.id).map(scoreOf).filter(x => x !== null);
+    return sc.some((x, i) => i > 0 && x > Math.max(...sc.slice(0, i)));
+  });
+  return {
+    available: quizzes.length, completedSets: perSet.filter(x => x.finished).length, inProgress: perSet.filter(x => x.open).length,
+    perSet, attempts: fin.length, totals, accuracy: graded ? totals.correct / graded : null, graded,
+    streak: current, bestStreak: best, days: perDay.size, last14, improved,
+    perfect: fin.some(r => n(r.wrong) === 0 && n(r.manual) === 0 && n(r.correct) >= 3),
+    noHints: fin.some(r => n(r.hints_used) === 0 && n(r.hints_available) > 0 && n(r.answered) >= 5)
+  };
+}
+// Osiągnięcia: wystarczy dopisać pozycję do listy (value = bieżący postęp, goal = cel; goal może być funkcją profilu).
+// Liczone na bieżąco z wyników, więc nowe osiągnięcia działają też wstecz.
+const ACHIEVEMENTS = [
+  { id: 'first_set', icon: '🎯', title: 'Pierwszy krok', desc: 'Ukończ pierwszy zestaw.', goal: 1, value: P => P.completedSets },
+  { id: 'five_sets', icon: '📚', title: 'Pięć zestawów', desc: 'Ukończ pięć różnych zestawów.', goal: 5, value: P => P.completedSets },
+  { id: 'all_sets', icon: '🏆', title: 'Komplet', desc: 'Ukończ wszystkie dostępne zestawy (co najmniej dwa).', goal: P => Math.max(P.available, 2), value: P => P.completedSets },
+  { id: 'answers25', icon: '✏️', title: 'Rozgrzewka', desc: 'Odpowiedz na 25 pytań.', goal: 25, value: P => P.totals.answered },
+  { id: 'answers100', icon: '💯', title: 'Setka', desc: 'Odpowiedz na 100 pytań.', goal: 100, value: P => P.totals.answered },
+  { id: 'answers500', icon: '🚀', title: 'Maraton', desc: 'Odpowiedz na 500 pytań.', goal: 500, value: P => P.totals.answered },
+  { id: 'perfect', icon: '⭐', title: 'Bez błędu', desc: 'Ukończ zestaw (min. 3 pytania) bez ani jednej błędnej odpowiedzi.', goal: 1, value: P => (P.perfect ? 1 : 0) },
+  { id: 'nohints', icon: '🧠', title: 'Samodzielny', desc: 'Ukończ zestaw z podpowiedziami (min. 5 pytań), nie korzystając z żadnej.', goal: 1, value: P => (P.noHints ? 1 : 0) },
+  { id: 'improver', icon: '📈', title: 'Do przodu', desc: 'Rozwiąż zestaw ponownie i popraw swój wynik.', goal: 1, value: P => (P.improved ? 1 : 0) },
+  { id: 'streak3', icon: '🔥', title: 'Trzy dni z rzędu', desc: 'Ucz się trzy dni pod rząd.', goal: 3, value: P => P.bestStreak },
+  { id: 'streak7', icon: '🗓️', title: 'Tydzień nauki', desc: 'Ucz się siedem dni pod rząd.', goal: 7, value: P => P.bestStreak },
+  { id: 'accuracy80', icon: '🎯', title: 'Celne oko', desc: 'Utrzymaj skuteczność co najmniej 80% przy minimum 50 ocenionych odpowiedziach.', goal: 80, unit: '%',
+    value: P => (P.graded >= 50 && P.accuracy !== null ? Math.round(P.accuracy * 100) : 0) }
+];
+function computeAchievements(P) {
+  return ACHIEVEMENTS.map(a => {
+    const goal = typeof a.goal === 'function' ? a.goal(P) : a.goal, value = Math.min(a.value(P), goal);
+    return { ...a, goal, progress: value, done: value >= goal };
+  });
 }
 // </pure>
 
@@ -1172,7 +1257,7 @@ function showSummary() {
   // w podejściu ucznia: zapis wyniku w bazie i powrót do listy zestawów
   const student = QCTX.kind === 'student';
   const saveNote = h('p', { class: 'hint' });
-  const saveWrap = h('div');
+  const saveWrap = h('div'), achBox = h('div');
   if (student) {
     if (!QCTX.skippedSent) {             // pominięte pytania zapisujemy jako niepoprawne (bez odpowiedzi)
       QCTX.skippedSent = true;
@@ -1185,7 +1270,7 @@ function showSummary() {
     const doSave = () => {
       saveWrap.replaceChildren(h('p', { class: 'hint' }, 'Zapisywanie wyniku…'));
       QCTX.onFinish().then(res => {
-        if (res.ok) { saveWrap.replaceChildren(h('div', { class: 'note good' }, 'Wynik został zapisany.')); return; }
+        if (res.ok) { saveWrap.replaceChildren(h('div', { class: 'note good' }, 'Wynik został zapisany.')); announceAchievements(achBox); return; }
         saveWrap.replaceChildren(h('div', { class: 'note bad' }, 'Nie udało się zapisać wyniku: ' + res.error + ' '),
           h('button', { class: 'secondary small', type: 'button', onclick: () => { QCTX.resultPromise = null; doSave(); } }, 'Spróbuj ponownie'));
       });
@@ -1200,7 +1285,7 @@ function showSummary() {
     ...(hintsAll ? [h('p', {}, `Wykorzystane podpowiedzi: ${hintsUsed} z ${hintsAll}.`)] : []),
     ...(minis.length ? [h('p', {}, `Mini-pytania w podpowiedziach: rozwiązane ${minis.filter(m => m.solved).length} z ${minis.length} odsłoniętych, łącznie prób: ${minis.reduce((a, m) => a + m.attempts, 0)}.`)] : []),
     h('div', { style: 'margin-bottom:16px' }, rows),
-    ...(student ? [saveWrap] : []),
+    ...(student ? [saveWrap, achBox] : []),
     student
       ? h('button', { class: 'primary', onclick: () => QCTX.onExit() }, 'Wróć do listy zestawów')
       : h('button', { class: 'primary', onclick: () => { resetSession(); showQuestion(); } }, 'Zacznij od nowa')));
@@ -1891,12 +1976,13 @@ const userEl = document.getElementById('userbox');
 const mainEl = document.querySelector('main');
 const loginEl = document.getElementById('login');
 const homeEl = document.getElementById('home');
+const profileEl = document.getElementById('profile');
 const setsEl = document.getElementById('sets');
 const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 const reportsEl = document.getElementById('reports');
 
-const APP_VERSION = '2026-11-06 · tryb ciemny';
+const APP_VERSION = '2026-11-08 · profil i osiągnięcia';
 // Motyw: auto (jak system) → jasny → ciemny; wybór pamiętany w przeglądarce
 {
   const KEY = 'quiz-theme', btn = document.getElementById('themebtn');
@@ -1945,6 +2031,7 @@ let slidesShown = false;
 const VIEWS = {
   login: { el: loginEl },
   home: { el: homeEl, show: showHome },
+  profile: { el: profileEl, show: showProfile },
   quiz: { el: quizEl, show() { if (QCTX.kind === 'preview' && dirty) { dirty = false; resetSession(); refreshQuiz(); showQuestion(); } } },
   slides: { el: slidesEl, show() { if (!slidesShown) { slidesShown = true; showSlide(); } } },
   editor: { el: editorEl, wide: true, show() { if (!editorBuilt) buildEditor(); renderList(); renderForm(); } },
@@ -2040,7 +2127,7 @@ async function enterApp(user) {
     activateTab('editor');
     refreshReportBadge();
   } else {
-    setNav([['home', 'Moje zestawy']]);
+    setNav([['home', 'Moje zestawy'], ['profile', 'Mój profil']]);
     activateTab('home');
   }
 }
@@ -2316,6 +2403,110 @@ async function showHome() {
     }
     homeEl.replaceChildren(...out);
   } catch (e) { homeEl.replaceChildren(errBox(e)); }
+}
+
+/* ==========================================================================
+   UCZEŃ: profil – postępy i osiągnięcia
+   ========================================================================== */
+// Dane do profilu: własne (stu = null, uczeń) albo wskazanego ucznia (nauczyciel).
+async function loadProfileData(stu) {
+  let qz, rs;
+  if (stu) {
+    const as = await sb.from('assignments').select('quiz_id').eq('student_id', stu.id);
+    if (as.error) throw as.error;
+    const ids = as.data.map(x => x.quiz_id);
+    qz = ids.length ? await sb.from('quizzes').select('id,title,category_id').in('id', ids).order('title', { ascending: true }) : { data: [] };
+    rs = await sb.from('results_overview').select('*').eq('student_id', stu.id).order('started_at', { ascending: true });
+  } else {
+    [qz, rs] = await Promise.all([
+      sb.from('quizzes').select('id,title,category_id').order('title', { ascending: true }),
+      sb.from('results_overview').select('*').order('started_at', { ascending: true })
+    ]);
+  }
+  const qc = await sb.from('quiz_questions').select('quiz_id,question_id');
+  for (const r of [qz, rs, qc]) if (r.error) throw r.error;
+  return { qz: qz.data, rs: rs.data, qc: qc.data };
+}
+// Które osiągnięcia uczeń już widział (pamiętane w przeglądarce; null = jeszcze nigdy).
+const achKey = () => 'quiz:ach:' + (ME?.id || '');
+function achSeen() { try { const v = localStorage.getItem(achKey()); return v === null ? null : new Set(JSON.parse(v)); } catch (e) { return null; } }
+function achSave(ids) { try { localStorage.setItem(achKey(), JSON.stringify(ids)); } catch (e) { /* brak */ } }
+
+// Komunikat po zakończeniu testu: osiągnięcia zdobyte od ostatniej wizyty / ostatniego komunikatu.
+async function announceAchievements(box) {
+  try {
+    const d = await loadProfileData(null);
+    const got = computeAchievements(computeProfile(d.rs, d.qz)).filter(a => a.done);
+    const seen = achSeen(), fresh = got.filter(a => !seen || !seen.has(a.id));
+    achSave(got.map(a => a.id));
+    if (!fresh.length) return;
+    box.replaceChildren(h('div', { class: 'note good ach-new' },
+      h('b', {}, fresh.length > 1 ? '🎉 Nowe osiągnięcia!' : '🎉 Nowe osiągnięcie!'),
+      ...fresh.map(a => h('div', {}, `${a.icon} `, h('b', {}, a.title), ` – ${a.desc}`)),
+      h('div', { class: 'rowbtns' }, h('button', { class: 'secondary small', type: 'button', onclick: () => activateTab('profile') }, 'Zobacz mój profil'))));
+  } catch (e) { console.warn('Osiągnięcia niedostępne:', e); }
+}
+
+function showProfile() { return renderProfile(profileEl, null); }
+async function renderProfile(box, stu) {
+  box.replaceChildren(loadingBox());
+  try {
+    const { qz, rs, qc } = await loadProfileData(stu);
+    const P = computeProfile(rs, qz), A = computeAchievements(P);
+    const total = id => qc.filter(r => r.quiz_id === id).length;
+    const pct = v => `${Math.round(v * 100)}%`;
+    const bar = (v, cls = '') => h('div', { class: 'pbar ' + cls }, h('div', { style: `width:${Math.max(0, Math.min(1, v)) * 100}%` }));
+    const stat = (big, label, sub) => h('div', { class: 'stat' }, h('div', { class: 'big' }, big), h('div', {}, label), sub ? h('div', { class: 'hint' }, sub) : '');
+
+    // które osiągnięcia są nowe od ostatniej wizyty (pamiętane w przeglądarce; pierwsza wizyta niczego nie oznacza)
+    const seen = stu ? null : achSeen();                                   // nauczyciel niczego nie oznacza ani nie zapisuje
+    const isNew = a => a.done && seen && !seen.has(a.id);
+    if (!stu) achSave(A.filter(a => a.done).map(a => a.id));
+
+    const who = stu ? (stu.full_name || stu.login || 'uczeń') : (ME?.full_name || '');
+    const out = [];
+    if (stu) out.push(h('div', { class: 'phead' }, h('button', { class: 'secondary small', type: 'button', onclick: () => showStudents() }, '← Lista uczniów')));
+    out.push(h('h2', { style: 'margin-top:0' }, (stu ? 'Profil ucznia: ' : 'Mój profil') + (stu ? who : (who ? ' – ' + who : ''))));
+    out.push(h('div', { class: 'card' },
+      h('h3', { style: 'margin-top:0' }, 'Postęp w zestawach'),
+      P.available
+        ? [h('div', {}, `Ukończone zestawy: `, h('b', {}, `${P.completedSets} z ${P.available}`), P.inProgress ? ` · w toku: ${P.inProgress}` : ''), bar(P.completedSets / P.available)]
+        : h('p', { class: 'hint' }, stu ? 'Uczeń nie ma przypisanych zestawów.' : 'Nie masz jeszcze przypisanych zestawów.')));
+    out.push(h('div', { class: 'stats' },
+      stat(String(P.attempts), 'ukończone podejścia'),
+      stat(String(P.totals.answered), 'udzielone odpowiedzi', P.totals.manual ? `w tym ${P.totals.manual} do oceny` : ''),
+      stat(P.accuracy === null ? '—' : pct(P.accuracy), 'skuteczność', `${P.totals.correct} z ${P.graded} ocenionych`),
+      stat(`${P.streak} ${P.streak === 1 ? 'dzień' : 'dni'}`, 'aktualna seria', `najdłuższa: ${P.bestStreak} · dni nauki: ${P.days}`),
+      stat(String(P.totals.hints), 'wykorzystane podpowiedzi')));
+
+    const max = Math.max(1, ...P.last14.map(d => d.n));
+    out.push(h('div', { class: 'card' }, h('h3', { style: 'margin-top:0' }, 'Aktywność – ostatnie 14 dni'),
+      h('div', { class: 'act' }, P.last14.map(d => h('div', { class: 'col', title: `${d.key}: ${d.n} odp.` },
+        h('div', { class: 'cbar' + (d.n ? ' on' : ''), style: `height:${d.n ? Math.max(8, d.n / max * 100) : 3}%` }), h('div', { class: 'hint' }, d.key.slice(8))))),
+      P.totals.answered ? '' : h('p', { class: 'hint' }, 'Tu pojawi się wykres nauki.')));
+
+    out.push(h('h3', {}, 'Zestawy'));
+    if (!P.perSet.length) out.push(h('p', { class: 'hint' }, 'Brak zestawów.'));
+    P.perSet.forEach(ps => {
+      const st = ps.open ? ['w toku', 'warn'] : ps.finished ? ['ukończony', 'on'] : ['nierozpoczęty', ''];
+      out.push(h('div', { class: 'card' },
+        h('div', { class: 'meta' }, h('b', {}, ps.quiz.title), ' ', h('span', { class: 'badge ' + st[1] }, st[0])),
+        ps.open ? [h('div', { class: 'hint' }, `Odpowiedzi w bieżącym podejściu: ${toNum(ps.open.answered)} z ${total(ps.quiz.id)}`), bar(toNum(ps.open.answered) / Math.max(1, total(ps.quiz.id)))] : '',
+        ps.finished
+          ? [h('div', { class: 'hint' }, `Najlepszy wynik: ${ps.bestRow ? `${toNum(ps.bestRow.correct)} z ${toNum(ps.bestRow.correct) + toNum(ps.bestRow.wrong)}` : '—'}`
+              + (ps.best !== null ? ` (${pct(ps.best)})` : '') + ` · ukończono: ${ps.finished}× · ostatnio: ${fmtDT(ps.last.finished_at)}`), bar(ps.best ?? 0, 'ok')]
+          : ''));
+    });
+
+    const got = A.filter(a => a.done).length;
+    out.push(h('h3', {}, `Osiągnięcia (${got} z ${A.length})`),
+      h('div', { class: 'achs' }, [...A.filter(a => a.done), ...A.filter(a => !a.done)].map(a => h('div', { class: 'ach' + (a.done ? ' got' : '') },
+        h('div', { class: 'icon' }, a.done ? a.icon : '🔒'),
+        h('div', {}, h('b', {}, a.title), isNew(a) ? h('span', { class: 'badge on', style: 'margin-left:6px' }, 'Nowe!') : ''),
+        h('div', { class: 'hint' }, a.desc),
+        a.done ? '' : [bar(a.progress / a.goal), h('div', { class: 'hint' }, `${a.progress} / ${a.goal}${a.unit || ''}`)]))));
+    box.replaceChildren(...out);
+  } catch (e) { box.replaceChildren(errBox(e)); }
 }
 
 /* ==========================================================================
@@ -2875,6 +3066,7 @@ function renderStudents() {
       } catch (e) { st.textContent = 'Błąd: ' + friendlyError(e); }
     };
     name.addEventListener('change', save); cls.addEventListener('change', save); act.addEventListener('change', save);
+    const prof = h('button', { class: 'secondary small', type: 'button', onclick: () => renderProfile(studentsEl, s) }, 'Profil');
     const reset = h('button', { class: 'secondary small', type: 'button', onclick: async () => {
       if (!confirm(`Ustawić nowe hasło dla: ${s.login}?`)) return;
       const password = genPassword(); st.textContent = 'Zmiana hasła…';
@@ -2890,7 +3082,7 @@ function renderStudents() {
       try { await manageStudents({ action: 'delete', id: s.id }); await showStudents(); }
       catch (e) { st.textContent = 'Błąd: ' + friendlyError(e); }
     } }, 'Usuń');
-    return h('tr', {}, h('td', {}, s.login || '—'), h('td', {}, name), h('td', {}, cls), h('td', {}, act), h('td', {}, reset, ' ', del), h('td', {}, st));
+    return h('tr', {}, h('td', {}, s.login || '—'), h('td', {}, name), h('td', {}, cls), h('td', {}, act), h('td', {}, prof, ' ', reset, ' ', del), h('td', {}, st));
   });
   out.push(h('div', { class: 'card' }, rows.length ? table(['Login', 'Imię i nazwisko', 'Klasa', 'Aktywny', '', ''], rows)
     : h('p', { class: 'hint' }, 'Nie ma jeszcze żadnych uczniów. Dodaj pierwszych powyżej.')));
