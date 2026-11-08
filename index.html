@@ -202,6 +202,11 @@
   .ach .icon { grid-row: 1 / span 3; font-size: 2rem; line-height: 1.1; }
   .ach > div:nth-child(n+3) { grid-column: 2; }
   .ach.got { opacity: 1; border-color: var(--ok); background: var(--ok-bg); }
+  .prow { display: flex; gap: 8px; align-items: center; padding: 10px 14px; margin-bottom: 8px; }
+  .prow .t { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .prow.sel { border-color: var(--accent); }
+  details.proc { padding: 10px 14px; margin-bottom: 8px; } details.proc summary { cursor: pointer; }
+  .procbody { margin-top: 10px; } .procbody.preview { border: 1px dashed var(--line); border-radius: 8px; padding: 8px 12px; margin: 4px 0 12px; }
   .sumrow { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--line); }
   .sumrow .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sumrow .st { font-size: .85rem; white-space: nowrap; }
@@ -221,7 +226,7 @@
   <section id="home" hidden></section>
   <section id="profile" hidden></section>
   <section id="quiz" hidden></section>
-  <section id="slides" hidden></section>
+  <section id="procedures" hidden></section>
   <section id="editor" hidden></section>
   <section id="sets" hidden></section>
   <section id="results" hidden></section>
@@ -285,15 +290,6 @@ const DEFAULT_QUESTIONS = [
     explanation: '$2(x-1)^2-3=2(x^2-2x+1)-3=2x^2-4x-1$.' }
 ];
 
-const SLIDES = [
-  { title: 'Czym jest pochodna?',
-    text: 'Pochodna funkcji w punkcie opisuje chwilową szybkość jej zmian:\n$$f\'(x_0)=\\lim_{h\\to0}\\frac{f(x_0+h)-f(x_0)}{h}$$' },
-  { title: 'Wpływ parametru $a$ na parabolę',
-    text: 'Przesuń suwak $a$ i zobacz, jak zmienia się wykres funkcji $f(x)=a\\,x^2$.',
-    ggb: { setup: ['a=1', 'f(x)=a*x^2', 'SetVisibleInView(a,1,true)', 'ShowGrid(true)', 'ZoomIn(-6,-4,6,8)'], height: 400 } },
-  { title: 'Podsumowanie',
-    text: 'Dla $a>0$ ramiona paraboli skierowane są w górę, dla $a<0$ w dół, a dla $a=0$ wykres jest prostą $y=0$.' }
-];
 
 const TYPE_LABEL = {
   single: 'Jednokrotny wybór', multi: 'Wielokrotny wybór',
@@ -1292,31 +1288,6 @@ function showSummary() {
 }
 
 /* ==========================================================================
-   PREZENTACJA
-   ========================================================================== */
-const slidesEl = document.getElementById('slides');
-let si = 0;
-function showSlide() {
-  const s = SLIDES[si];
-  const card = h('div', { class: 'card slide' }, rich('h2', s.title), rich('div', s.text, 'prompt'));
-  slidesEl.replaceChildren(card);
-  if (s.ggb) {
-    const holder = h('div', { class: 'ggb' });
-    card.append(holder);
-    mountGGB(holder, s.ggb.setup, s.ggb.height || 380);
-  }
-  const prev = h('button', { class: 'secondary', onclick: () => { si--; showSlide(); } }, '← Wstecz');
-  const next = h('button', { class: 'primary', onclick: () => { si++; showSlide(); } }, 'Dalej →');
-  prev.disabled = si === 0; next.disabled = si === SLIDES.length - 1;
-  slidesEl.append(h('div', { class: 'nav' }, prev, h('span', { class: 'meta' }, `${si + 1} / ${SLIDES.length}`), next));
-}
-document.addEventListener('keydown', e => {
-  if (slidesEl.hidden || e.target.closest('input,textarea,math-field')) return;
-  if (e.key === 'ArrowRight' && si < SLIDES.length - 1) { si++; showSlide(); }
-  if (e.key === 'ArrowLeft' && si > 0) { si--; showSlide(); }
-});
-
-/* ==========================================================================
    EDYTOR TREŚCI
    ========================================================================== */
 const editorEl = document.getElementById('editor');
@@ -1977,12 +1948,13 @@ const mainEl = document.querySelector('main');
 const loginEl = document.getElementById('login');
 const homeEl = document.getElementById('home');
 const profileEl = document.getElementById('profile');
+const procsEl = document.getElementById('procedures');
 const setsEl = document.getElementById('sets');
 const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 const reportsEl = document.getElementById('reports');
 
-const APP_VERSION = '2026-11-08 · profil i osiągnięcia';
+const APP_VERSION = '2026-11-08 · procedury';
 // Motyw: auto (jak system) → jasny → ciemny; wybór pamiętany w przeglądarce
 {
   const KEY = 'quiz-theme', btn = document.getElementById('themebtn');
@@ -2027,13 +1999,12 @@ function table(headers, rows) {
 /* ==========================================================================
    WIDOKI I NAWIGACJA
    ========================================================================== */
-let slidesShown = false;
 const VIEWS = {
   login: { el: loginEl },
   home: { el: homeEl, show: showHome },
   profile: { el: profileEl, show: showProfile },
   quiz: { el: quizEl, show() { if (QCTX.kind === 'preview' && dirty) { dirty = false; resetSession(); refreshQuiz(); showQuestion(); } } },
-  slides: { el: slidesEl, show() { if (!slidesShown) { slidesShown = true; showSlide(); } } },
+  procedures: { el: procsEl, get wide() { return ME?.role === 'teacher'; }, show: showProcedures },
   editor: { el: editorEl, wide: true, show() { if (!editorBuilt) buildEditor(); renderList(); renderForm(); } },
   sets: { el: setsEl, wide: true, show: showSets },
   results: { el: resultsEl, wide: true, show: showResults },
@@ -2072,7 +2043,7 @@ async function signOutQuiet() { try { if (sb) await sb.auth.signOut(); } catch (
 function resetAppState() {
   clearTimeout(syncTimer); syncTimer = null;
   ME = null; MODE = null; questions = []; QUIZ = []; synced.clear(); sel = null;
-  editorBuilt = false; slidesShown = false; dirty = false;
+  editorBuilt = false; dirty = false;
   saveState = { kind: 'idle', text: '' };
   QCTX = { kind: 'preview' }; resetSession();
 }
@@ -2123,11 +2094,11 @@ async function enterApp(user) {
   if (ME.role === 'teacher') {
     try { await loadCloudQuestions(); } catch (e) { await signOutQuiet(); return showLogin(friendlyError(e)); }
     sel = questions[0]?.id ?? null;
-    setNav([['editor', 'Pytania'], ['sets', 'Zestawy'], ['results', 'Wyniki'], ['reports', 'Zgłoszenia'], ['students', 'Uczniowie'], ['quiz', 'Podgląd'], ['slides', 'Prezentacja']]);
+    setNav([['editor', 'Pytania'], ['sets', 'Zestawy'], ['results', 'Wyniki'], ['reports', 'Zgłoszenia'], ['students', 'Uczniowie'], ['quiz', 'Podgląd'], ['procedures', 'Procedury']]);
     activateTab('editor');
     refreshReportBadge();
   } else {
-    setNav([['home', 'Moje zestawy'], ['profile', 'Mój profil']]);
+    setNav([['home', 'Moje zestawy'], ['procedures', 'Procedury'], ['profile', 'Mój profil']]);
     activateTab('home');
   }
 }
@@ -2147,7 +2118,7 @@ function enterLocal() {
   questions = loadQuestions(); sel = questions[0]?.id ?? null;
   refreshQuiz();
   setUserbox();
-  setNav([['quiz', 'Sprawdzian'], ['slides', 'Prezentacja'], ['editor', 'Edytor']]);
+  setNav([['quiz', 'Sprawdzian'], ['editor', 'Edytor']]);
   showQuestion(); activateTab('quiz');
 }
 
@@ -2403,6 +2374,114 @@ async function showHome() {
     }
     homeEl.replaceChildren(...out);
   } catch (e) { homeEl.replaceChildren(errBox(e)); }
+}
+
+/* ==========================================================================
+   PROCEDURY: nauczyciel pisze treści, uczeń czyta te oznaczone jako widoczne
+   ========================================================================== */
+const PROC = { rows: [], sel: null, msg: '' };       // sel: id edytowanej procedury, 'new' albo null
+
+async function showProcedures() {
+  procsEl.replaceChildren(loadingBox());
+  try {
+    const r = await sb.from('procedures').select('*').order('position', { ascending: true }).order('created_at', { ascending: true });
+    if (r.error) throw r.error;
+    PROC.rows = r.data;
+  } catch (e) { procsEl.replaceChildren(errBox(e)); return; }
+  if (ME?.role === 'teacher') renderProcTeacher(); else renderProcStudent();
+}
+
+// Treść procedury (tekst z formatowaniem i wzorami + opcjonalna GeoGebra)
+function procBody(p) {
+  const box = h('div', { class: 'procbody' }, rich('div', p.body || '', 'prompt'));
+  const cmds = String(p.ggb || '').split('\n').map(x => x.trim()).filter(Boolean).slice(0, 60);
+  if (cmds.length) { const holder = h('div', { class: 'ggb' }); box.append(holder); setTimeout(() => mountGGB(holder, cmds, 400), 0); }
+  return box;
+}
+
+function renderProcStudent() {
+  const out = [h('h2', { style: 'margin-top:0' }, 'Procedury')];
+  if (!PROC.rows.length) out.push(h('div', { class: 'note' }, 'Nauczyciel nie udostępnił jeszcze żadnych procedur.'));
+  PROC.rows.forEach(p => {
+    const d = h('details', { class: 'card proc' }, h('summary', {}, h('b', {}, p.title)));
+    let built = false;
+    d.addEventListener('toggle', () => { if (d.open && !built) { built = true; d.append(procBody(p)); } });
+    out.push(d);
+  });
+  procsEl.replaceChildren(...out);
+}
+
+function renderProcTeacher() {
+  const out = [h('h2', { style: 'margin-top:0' }, 'Procedury'),
+    h('p', { class: 'hint' }, 'Treści widoczne dla uczniów w zakładce „Procedury”. Uczeń widzi tylko te, przy których zaznaczysz „Widoczna dla uczniów”. Możesz używać pogrubień (**tekst**), kursywy (*tekst*), list (linie zaczynające się od „- ”) i wzorów ($…$).')];
+  if (PROC.msg) { out.push(h('div', { class: 'note good' }, PROC.msg)); PROC.msg = ''; }
+  out.push(h('div', { class: 'phead' }, h('button', { class: 'primary', type: 'button', onclick: () => { PROC.sel = 'new'; renderProcTeacher(); } }, '+ Nowa procedura')));
+
+  const move = async (i, dir) => {
+    const rows = PROC.rows.slice(), j = i + dir; if (j < 0 || j >= rows.length) return;
+    [rows[i], rows[j]] = [rows[j], rows[i]];
+    try {
+      for (let k = 0; k < rows.length; k++) if (rows[k].position !== k) {
+        const u = await sb.from('procedures').update({ position: k }).eq('id', rows[k].id); if (u.error) throw u.error;
+      }
+      await showProcedures();
+    } catch (e) { PROC.msg = ''; procsEl.prepend(errBox(e)); }
+  };
+  if (!PROC.rows.length) out.push(h('p', { class: 'hint' }, 'Nie ma jeszcze żadnych procedur.'));
+  PROC.rows.forEach((p, i) => out.push(h('div', { class: 'card prow' + (PROC.sel === p.id ? ' sel' : '') },
+    h('span', { class: 't' }, p.title), ' ',
+    h('span', { class: 'badge ' + (p.published ? 'on' : '') }, p.published ? 'widoczna' : 'ukryta'),
+    h('span', { class: 'rowbtns' },
+      Object.assign(h('button', { class: 'secondary small', type: 'button', title: 'W górę', onclick: () => move(i, -1) }, '↑'), { disabled: i === 0 }),
+      Object.assign(h('button', { class: 'secondary small', type: 'button', title: 'W dół', onclick: () => move(i, 1) }, '↓'), { disabled: i === PROC.rows.length - 1 }),
+      h('button', { class: 'secondary small', type: 'button', onclick: () => { PROC.sel = p.id; renderProcTeacher(); procsEl.querySelector('.procform')?.scrollIntoView({ block: 'start' }); } }, 'Edytuj')))));
+
+  if (PROC.sel) {
+    const cur = PROC.rows.find(p => p.id === PROC.sel);
+    const d = { title: cur?.title || '', body: cur?.body || '', ggb: cur?.ggb || '', published: cur ? !!cur.published : false };
+    const msg = h('div', { class: 'note', hidden: '' });
+    const say = (t, k = '') => { msg.hidden = !t; msg.className = 'note ' + k; msg.textContent = t || ''; };
+    const prev = h('div', { class: 'procbody preview' });
+    const ggbHolder = h('div');
+    const drawPrev = () => { prev.replaceChildren(); setRich(prev, d.body || '*(podgląd treści)*'); };
+    drawPrev();
+    const body = textArea(d.body, v => { d.body = v; drawPrev(); }, 12, 'Treść procedury…');
+    const ggb = textArea(d.ggb, v => { d.ggb = v; }, 4, 'f(x)=x^2\nShowGrid(true)');
+    const pub = h('input', { type: 'checkbox' }); pub.checked = d.published; pub.addEventListener('change', () => { d.published = pub.checked; });
+    const save = h('button', { class: 'primary', type: 'button' }, 'Zapisz');
+    save.onclick = async () => {
+      const title = d.title.trim();
+      if (!title) { say('Wpisz tytuł procedury.', 'bad'); return; }
+      const row = { title, body: d.body, ggb: d.ggb.trim() || null, published: d.published };
+      save.disabled = true; say('Zapisywanie…');
+      try {
+        if (cur) { const u = await sb.from('procedures').update(row).eq('id', cur.id); if (u.error) throw u.error; }
+        else {
+          const i = await sb.from('procedures').insert({ ...row, position: PROC.rows.length }).select('id').single();
+          if (i.error) throw i.error; PROC.sel = i.data.id;
+        }
+        PROC.msg = 'Zapisano ✓'; await showProcedures();
+      } catch (e) { save.disabled = false; say('Nie udało się zapisać: ' + friendlyError(e), 'bad'); }
+    };
+    const del = cur ? h('button', { class: 'secondary danger', type: 'button', onclick: async () => {
+      if (!confirm(`Usunąć procedurę „${cur.title}”? Tej operacji nie można cofnąć.`)) return;
+      try { const r = await sb.from('procedures').delete().eq('id', cur.id); if (r.error) throw r.error; PROC.sel = null; PROC.msg = 'Usunięto.'; await showProcedures(); }
+      catch (e) { say('Nie udało się usunąć: ' + friendlyError(e), 'bad'); }
+    } }, 'Usuń') : '';
+    const showGgb = h('button', { class: 'secondary small', type: 'button', onclick: () => {
+      const cmds = d.ggb.split('\n').map(x => x.trim()).filter(Boolean).slice(0, 60);
+      if (!cmds.length) return;
+      ggbHolder.replaceChildren(); const holder = h('div', { class: 'ggb' }); ggbHolder.append(holder); mountGGB(holder, cmds, 400);
+    } }, 'Pokaż GeoGebrę w podglądzie');
+    out.push(h('div', { class: 'card procform' }, h('h3', { style: 'margin-top:0' }, cur ? 'Edycja procedury' : 'Nowa procedura'), msg,
+      field('Tytuł', textInput(d.title, v => { d.title = v; }, 'np. Jak rozwiązać równanie kwadratowe')),
+      field('Treść', body),
+      h('div', { class: 'hint' }, 'Podgląd:'), prev,
+      field('GeoGebra (opcjonalnie)', ggb, 'Polecenia GeoGebry, jedno w linii – uczeń zobaczy aplet pod treścią.'), showGgb, ggbHolder,
+      h('label', { class: 'opt', style: 'margin-top:12px' }, pub, h('span', {}, 'Widoczna dla uczniów')),
+      h('div', { class: 'rowbtns' }, save, h('button', { class: 'secondary', type: 'button', onclick: () => { PROC.sel = null; renderProcTeacher(); } }, 'Zamknij'), del)));
+  }
+  procsEl.replaceChildren(...out);
 }
 
 /* ==========================================================================
