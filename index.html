@@ -937,7 +937,7 @@ const TYPES = {
         if (pt.type === 'truefalse') return x === true ? 'Prawda' : x === false ? 'Fałsz' : '';
         return String(x ?? '');
       };
-      return { parts: q.parts.map((pt, i) => ({ prompt: plainTitle(pt), answer: show(pt, Array.isArray(v) ? v[i] : undefined), status: r.parts[i].status })) };
+      return { parts: q.parts.map((pt, i) => ({ prompt: String(pt.prompt || ''), type: pt.type, answer: show(pt, Array.isArray(v) ? v[i] : undefined), status: r.parts[i].status })) };
     }
   },
   short_text: {
@@ -1954,7 +1954,7 @@ const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 const reportsEl = document.getElementById('reports');
 
-const APP_VERSION = '2026-11-08 · procedury';
+const APP_VERSION = '2026-11-12 · wzory w wynikach';
 // Motyw: auto (jak system) → jasny → ciemny; wybór pamiętany w przeglądarce
 {
   const KEY = 'quiz-theme', btn = document.getElementById('themebtn');
@@ -2298,7 +2298,7 @@ async function openMyAttempt(r, box) {
     const reviewed = x.status === 'manual' && x.reviewed_at;
     return h('div', { class: 'card' },
       h('div', { class: 'meta' }, `Pytanie ${i + 1} · `, h('span', { class: 'badge ' + (x.status === 'correct' || reviewed ? 'on' : x.status === 'manual' ? 'warn' : '') }, reviewed ? 'ocenione przez nauczyciela' : STATUS[x.status] || x.status)),
-      h('p', {}, plainTitle({ prompt: x.question_prompt })),
+      rich('div', x.question_prompt || '', 'prompt'),
       h('div', { class: 'hint' }, 'Twoja odpowiedź:'), h('div', { style: 'white-space:pre-wrap;margin-bottom:8px' }, fmtAnswer(x)),
       x.points != null ? h('div', {}, h('b', {}, 'Punkty: '), String(x.points)) : '',
       x.teacher_comment ? h('div', { class: 'note' }, h('b', {}, 'Komentarz nauczyciela: '), x.teacher_comment) : '');
@@ -2918,6 +2918,12 @@ async function showResults() {
   renderResults();
 }
 
+// Odpowiedź zapisana jako LaTeX (pytania z odpowiedzią matematyczną) – pokazujemy jako sformatowany wzór.
+function mathSpan(latex) {
+  const e = h('span');
+  if (window.katex) { try { window.katex.render(fixLimits(String(latex)), e, { throwOnError: false, macros: { ...KATEX_MACROS } }); return e; } catch { /* poniżej: zwykły tekst */ } }
+  e.textContent = String(latex); return e;
+}
 function fmtAnswer(a) {
   const v = a.answer;
   if (v === null || v === undefined || v === '') return '—';
@@ -2926,10 +2932,11 @@ function fmtAnswer(a) {
     case 'group': {
       const ST = { correct: '✓', wrong: '✗', manual: '(do oceny)' };
       return h('div', {}, (v.parts || []).map((x, i) => h('div', { style: 'margin-bottom:4px' },
-        h('b', {}, partLetter(i) + ' '), `${x.prompt}: `, h('span', {}, x.answer || '—'), ` ${ST[x.status] || ''}`)));
+        h('b', {}, partLetter(i) + ' '), rich('span', x.prompt || ''), ': ', x.answer && x.type === 'short_math' ? mathSpan(x.answer) : h('span', {}, x.answer || '—'), ` ${ST[x.status] || ''}`)));
     }
     case 'single': return `opcja nr ${Number(v) + 1}`;
     case 'multi': return Array.isArray(v) && v.length ? 'opcje nr ' + v.map(i => i + 1).join(', ') : '—';
+    case 'short_math': return mathSpan(v);
     case 'geogebra': return typeof v === 'object' ? `punkt (${(+v.x).toFixed(2)}; ${(+v.y).toFixed(2)})` : String(v);
     default: return String(v);
   }
@@ -2960,7 +2967,7 @@ function answersTable(list) {
     const minis = Array.isArray(a.hint_minis) ? a.hint_minis : [];
     return h('tr', {},
       h('td', {}, String(i + 1)),
-      h('td', {}, plainTitle({ prompt: a.question_prompt }), a.wants_more ? h('div', {}, h('span', { class: 'badge warn' }, '★ chce więcej takich zadań')) : ''),
+      h('td', {}, rich('div', a.question_prompt || '(brak treści)'), a.wants_more ? h('div', {}, h('span', { class: 'badge warn' }, '★ chce więcej takich zadań')) : ''),
       h('td', { style: 'white-space:pre-wrap' }, fmtAnswer(a)),
       h('td', {}, h('span', { class: 'badge ' + (a.status === 'correct' ? 'on' : a.status === 'manual' ? 'warn' : '') }, STATUS[a.status] || a.status)),
       h('td', {}, `${toNum(a.hints_used)} z ${toNum(a.hints_total)}`,
