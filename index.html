@@ -1954,7 +1954,7 @@ const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 const reportsEl = document.getElementById('reports');
 
-const APP_VERSION = '2026-11-12 · wzory w wynikach';
+const APP_VERSION = '2026-11-13 · wzory w tytułach procedur';
 // Motyw: auto (jak system) → jasny → ciemny; wybór pamiętany w przeglądarce
 {
   const KEY = 'quiz-theme', btn = document.getElementById('themebtn');
@@ -2403,7 +2403,7 @@ function renderProcStudent() {
   const out = [h('h2', { style: 'margin-top:0' }, 'Procedury')];
   if (!PROC.rows.length) out.push(h('div', { class: 'note' }, 'Nauczyciel nie udostępnił jeszcze żadnych procedur.'));
   PROC.rows.forEach(p => {
-    const d = h('details', { class: 'card proc' }, h('summary', {}, h('b', {}, p.title)));
+    const d = h('details', { class: 'card proc' }, h('summary', {}, rich('b', p.title)));
     let built = false;
     d.addEventListener('toggle', () => { if (d.open && !built) { built = true; d.append(procBody(p)); } });
     out.push(d);
@@ -2429,7 +2429,7 @@ function renderProcTeacher() {
   };
   if (!PROC.rows.length) out.push(h('p', { class: 'hint' }, 'Nie ma jeszcze żadnych procedur.'));
   PROC.rows.forEach((p, i) => out.push(h('div', { class: 'card prow' + (PROC.sel === p.id ? ' sel' : '') },
-    h('span', { class: 't' }, p.title), ' ',
+    h('span', { class: 't' }, rich('span', p.title)), ' ',
     h('span', { class: 'badge ' + (p.published ? 'on' : '') }, p.published ? 'widoczna' : 'ukryta'),
     h('span', { class: 'rowbtns' },
       Object.assign(h('button', { class: 'secondary small', type: 'button', title: 'W górę', onclick: () => move(i, -1) }, '↑'), { disabled: i === 0 }),
@@ -2441,6 +2441,7 @@ function renderProcTeacher() {
     const d = { title: cur?.title || '', body: cur?.body || '', ggb: cur?.ggb || '', published: cur ? !!cur.published : false };
     const msg = h('div', { class: 'note', hidden: '' });
     const say = (t, k = '') => { msg.hidden = !t; msg.className = 'note ' + k; msg.textContent = t || ''; };
+    const titlePrev = h('div', { class: 'procbody preview', style: 'font-weight:600' }, rich('span', d.title));
     const prev = h('div', { class: 'procbody preview' });
     const ggbHolder = h('div');
     const drawPrev = () => { prev.replaceChildren(); setRich(prev, d.body || '*(podgląd treści)*'); };
@@ -2474,7 +2475,8 @@ function renderProcTeacher() {
       ggbHolder.replaceChildren(); const holder = h('div', { class: 'ggb' }); ggbHolder.append(holder); mountGGB(holder, cmds, 400);
     } }, 'Pokaż GeoGebrę w podglądzie');
     out.push(h('div', { class: 'card procform' }, h('h3', { style: 'margin-top:0' }, cur ? 'Edycja procedury' : 'Nowa procedura'), msg,
-      field('Tytuł', textInput(d.title, v => { d.title = v; }, 'np. Jak rozwiązać równanie kwadratowe')),
+      field('Tytuł', textInput(d.title, v => { d.title = v; titlePrev.replaceChildren(rich('span', v || '')); }, 'np. Równanie $x^2-4=0$'), 'Możesz użyć wzorów: $…$'),
+      h('div', { class: 'hint' }, 'Tytuł w podglądzie:'), titlePrev,
       field('Treść', body),
       h('div', { class: 'hint' }, 'Podgląd:'), prev,
       field('GeoGebra (opcjonalnie)', ggb, 'Polecenia GeoGebry, jedno w linii – uczeń zobaczy aplet pod treścią.'), showGgb, ggbHolder,
