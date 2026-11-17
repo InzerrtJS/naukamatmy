@@ -328,11 +328,82 @@ function evalAt(ce, expr, vals) {
   return NaN;
 }
 
+// Lista odpowiedzi w jednym zapisie (np. pierwiastki „x_1=3, x_2=5”): rozdzielana przecinkiem lub średnikiem poza nawiasami.
+// Przecinek między cyframi jest domyślnie ułamkiem dziesiętnym („2,5”), chyba że allCommas = true.
+function splitList(s, allCommas = false) {
+  const parts = []; let depth = 0, start = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if ('({['.includes(c)) depth++; else if (')}]'.includes(c)) depth--;
+    else if (depth === 0 && (c === ';' || (c === ',' && (allCommas || !(/\d/.test(s[i - 1] || '') && /\d/.test(s[i + 1] || '')))))) {
+      parts.push(s.slice(start, i).trim()); start = i + 1;
+    }
+  }
+  parts.push(s.slice(start).trim());
+  return parts.length > 1 && parts.every(Boolean) ? parts : null;
+}
+// Każdy element listy ucznia musi pasować do innego elementu wzorca (kolejność dowolna).
+function listMatch(ce, A, B, vars) {
+  if (A.length !== B.length) return false;
+  const used = B.map(() => false);
+  const go = i => {
+    if (i === A.length) return true;
+    for (let j = 0; j < B.length; j++) if (!used[j] && mathEqual(ce, A[i], B[j], vars)) { used[j] = true; if (go(i + 1)) return true; used[j] = false; }
+    return false;
+  };
+  return go(0);
+}
+
+// Równanie „lewa = prawa”: rozdziela strony (dokładnie jedno „=” poza klamrami) albo zwraca null.
+function splitEq(s) {
+  let depth = 0, at = -1, n = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '{') depth++; else if (c === '}') depth--;
+    else if (c === '=' && depth === 0) { n++; at = i; }
+  }
+  if (n !== 1) return null;
+  const l = s.slice(0, at).trim(), r = s.slice(at + 1).trim();
+  return l && r ? [l, r] : null;
+}
+// Dwa równania są równoważne, gdy „lewa − prawa” jednego jest stałą (niezerową, także ujemną) wielokrotnością drugiego,
+// np. 2m²−m−10=0 oraz −2m²+m+10=0 albo 2m²−m=10.
+function equationEqual(ce, ea, eb, vars) {
+  try {
+    const da = ce.parse(`(${ea[0]})-(${ea[1]})`), db = ce.parse(`(${eb[0]})-(${eb[1]})`);
+    if (da.isValid === false || db.isValid === false) return false;
+    let ratio = null, valid = 0;
+    // zmienne z pytania + te, które silnik widzi w zapisach (np. x_1 nie trzeba wpisywać w polu „Zmienne”)
+    const names = [...new Set([...vars, ...(da.unknowns || []), ...(db.unknowns || [])].filter(v => typeof v === 'string'))];
+    for (const s of SAMPLES) {
+      const vals = {};
+      names.forEach((v, i) => { vals[v] = s + i * 0.37; });
+      const x = evalAt(ce, da, vals), y = evalAt(ce, db, vals);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      const scale = 1 + Math.abs(x) + Math.abs(y);
+      if (Math.abs(y) < 1e-9 * scale) { if (Math.abs(x) > 1e-6 * scale) return false; valid++; continue; }
+      if (Math.abs(x) < 1e-9 * scale) return false;
+      const k = x / y;
+      if (ratio === null) ratio = k; else if (Math.abs(k - ratio) > 1e-6 * (1 + Math.abs(ratio))) return false;
+      valid++;
+    }
+    return valid >= 3;
+  } catch (e) { console.warn('equationEqual:', e); return false; }
+}
+
 // Równoważność dwóch wyrażeń: próbkowanie numeryczne w kilku punktach.
 function mathEqual(ce, a, b, vars = ['x']) {
   if (!norm(a)) return false;
   if (normLatex(a) === normLatex(b)) return true;
   if (!ce) return false;
+  if (/[,;]/.test(a) || /[,;]/.test(b)) {                 // kilka odpowiedzi naraz, kolejność nie ma znaczenia
+    for (const all of [false, true]) {
+      const la = splitList(a, all), lb = splitList(b, all);
+      if (la && lb && listMatch(ce, la, lb, vars)) return true;
+    }
+  }
+  const qa = splitEq(a), qb = splitEq(b);
+  if (qa || qb) return !!(qa && qb) && equationEqual(ce, qa, qb, vars);
   try {
     const ea = ce.parse(a), eb = ce.parse(b);
     if (ea.isValid === false || eb.isValid === false) return false;
@@ -1589,7 +1660,7 @@ function miniEditor(mini, changed) {
       let pvm = mathPreviewLines(mini.expected.join('\n'));
       wrap.append(field('Poprawne odpowiedzi – LaTeX (jedna w linii)',
         textArea(mini.expected.join('\n'), v => { mini.expected = v.split('\n'); const n = mathPreviewLines(v); pvm.replaceWith(n); pvm = n; changed(); }, 2, 'a^2-2ab+b^2'),
-        'Odpowiedź ucznia jest uznawana, gdy jest matematycznie równoważna którejś z nich (i ma wymaganą postać).'), pvm);
+        'Odpowiedź ucznia jest uznawana, gdy jest matematycznie równoważna którejś z nich (i ma wymaganą postać). Kilka odpowiedzi naraz (np. pierwiastki) zapisz po przecinku lub średniku, np. x_1=3, x_2=5 – kolejność nie ma znaczenia. Dla zwykłych liczb użyj średnika („3; 5”), bo „3,5” to ułamek.'), pvm);
       const formHelp = h('div', { class: 'hint' }), formSel = h('select');
       Object.entries(FORMS).forEach(([k, v]) => formSel.append(h('option', { value: k }, v)));
       formSel.value = (mini.form in FORMS) ? mini.form : 'any';
@@ -1691,7 +1762,7 @@ function typeEditor(q, card) {
         textArea(q.expected.join('\n'), v => {
           q.expected = v.split('\n'); const n = mathPreviewLines(v); pv.replaceWith(n); pv = n; commit(); refreshProblems();
         }, 3, '4x'),
-        'Odpowiedź ucznia jest uznawana, gdy jest matematycznie równoważna którejś z nich (i ma wymaganą postać).'), pv);
+        'Odpowiedź ucznia jest uznawana, gdy jest matematycznie równoważna którejś z nich (i ma wymaganą postać). Kilka odpowiedzi naraz (np. pierwiastki) zapisz po przecinku lub średniku, np. x_1=3, x_2=5 – kolejność nie ma znaczenia. Dla zwykłych liczb użyj średnika („3; 5”), bo „3,5” to ułamek.'), pv);
 
       const formHelp = h('div', { class: 'hint' });
       const formSel = h('select');
@@ -1963,7 +2034,7 @@ const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 const reportsEl = document.getElementById('reports');
 
-const APP_VERSION = '2026-11-17 · zestawy losujące';
+const APP_VERSION = '2026-11-17 · lista odpowiedzi';
 // Motyw: auto (jak system) → jasny → ciemny; wybór pamiętany w przeglądarce
 {
   const KEY = 'quiz-theme', btn = document.getElementById('themebtn');
