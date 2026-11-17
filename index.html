@@ -679,6 +679,15 @@ function normalizeImported(raw, usedIds) {
   return q;
 }
 
+// Losowanie pytań z puli: najpierw takie, których uczeń jeszcze nie miał w poprzednich podejściach do tego zestawu,
+// potem (jeśli ich za mało) uzupełnienie z pozostałych; kolejność zadawania jest losowa.
+function drawQuestions(ids, n, seen = new Set(), rnd = Math.random) {
+  const shuffle = a => { const x = a.slice(); for (let i = x.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [x[i], x[j]] = [x[j], x[i]]; } return x; };
+  const k = Math.max(0, Math.min(Math.floor(Number(n)) || 0, ids.length));
+  const fresh = shuffle(ids.filter(id => !seen.has(id))), old = shuffle(ids.filter(id => seen.has(id)));
+  return shuffle([...fresh, ...old].slice(0, k));
+}
+
 /* --- profil ucznia: statystyki i osiągnięcia liczone z zapisanych podejść --- */
 const dayKey = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const scoreOf = r => { const g = (Number(r.correct) || 0) + (Number(r.wrong) || 0); return g ? (Number(r.correct) || 0) / g : null; };
@@ -1954,7 +1963,7 @@ const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 const reportsEl = document.getElementById('reports');
 
-const APP_VERSION = '2026-11-13 · wzory w tytułach procedur';
+const APP_VERSION = '2026-11-17 · zestawy losujące';
 // Motyw: auto (jak system) → jasny → ciemny; wybór pamiętany w przeglądarce
 {
   const KEY = 'quiz-theme', btn = document.getElementById('themebtn');
@@ -2209,7 +2218,13 @@ async function startStudentQuiz(quiz, resumeId = null) {
   try {
     const qq = await sb.from('quiz_questions').select('question_id,position').eq('quiz_id', quiz.id).order('position', { ascending: true });
     if (qq.error) throw qq.error;
-    const ids = qq.data.map(r => r.question_id);
+    let ids = qq.data.map(r => r.question_id);
+    let saved = null;                                  // wznowienie zestawu losującego: te same pytania co na początku podejścia
+    if (resumeId) {
+      const at = await sb.from('attempts').select('question_ids').eq('id', resumeId).single();
+      if (at.error) throw at.error;
+      if (Array.isArray(at.data.question_ids)) { saved = at.data.question_ids; ids = saved; }
+    }
     let list = [];
     if (ids.length) {
       const qs = await sb.from('questions').select('id,type,content').in('id', ids);
@@ -2225,13 +2240,21 @@ async function startStudentQuiz(quiz, resumeId = null) {
       quizEl.append(h('button', { class: 'secondary', type: 'button', onclick: () => activateTab('home') }, 'Wróć do listy zestawów'));
       return;
     }
-    let attemptId = resumeId, done = new Map();
+    let attemptId = resumeId, done = new Map(), drawn = null;
     if (resumeId) {
       const old = await sb.from('answers').select('question_id,status,hints_used,hint_minis').eq('attempt_id', resumeId);
       if (old.error) throw old.error;
       old.data.forEach(a => { if (a.question_id) done.set(a.question_id, a); });
     } else {
-      const att = await sb.from('attempts').insert({ quiz_id: quiz.id }).select('id').single();
+      if (quiz.draw_count) {                          // zestaw losujący: wybierz pytania na to podejście (unikaj tych, które uczeń już miał)
+        const prev = await sb.from('attempts').select('question_ids').eq('quiz_id', quiz.id);
+        if (prev.error) throw prev.error;
+        const seen = new Set(prev.data.flatMap(r => r.question_ids || []));
+        const pick = drawQuestions(list.map(q => q.id), quiz.draw_count, seen);
+        const byQ = new Map(list.map(q => [q.id, q]));
+        list = pick.map(id => byQ.get(id)); drawn = pick;
+      }
+      const att = await sb.from('attempts').insert(drawn ? { quiz_id: quiz.id, question_ids: drawn } : { quiz_id: quiz.id }).select('id').single();
       if (att.error) throw att.error;
       attemptId = att.data.id;
     }
@@ -2310,7 +2333,7 @@ async function showHome() {
   homeEl.replaceChildren(loadingBox());
   try {
     const [qz, rs, qc, ct] = await Promise.all([
-      sb.from('quizzes').select('id,title,description,mode,category_id').order('created_at', { ascending: false }),
+      sb.from('quizzes').select('id,title,description,mode,category_id,draw_count').order('created_at', { ascending: false }),
       sb.from('results_overview').select('*').order('started_at', { ascending: false }),
       sb.from('quiz_questions').select('quiz_id,question_id'),
       sb.from('categories').select('id,name,parent_id,position')
@@ -2326,10 +2349,11 @@ async function showHome() {
       const last = done[0];
       const newest = rs.data.find(r => r.quiz_id === z.id);                       // najnowsze podejście (lista jest posortowana malejąco)
       const open = newest && !newest.finished_at ? newest : null;                  // niedokończone = można kontynuować
-      const total = qc.data.filter(r => r.quiz_id === z.id).length;
+      const pool = qc.data.filter(r => r.quiz_id === z.id).length, total = z.draw_count ? Math.min(z.draw_count, pool) : pool;
       return h('div', { class: 'card setcard' },
         h('h3', {}, z.title),
         z.description ? h('p', { class: 'hint' }, z.description) : '',
+        z.draw_count ? h('div', { class: 'hint' }, `🎲 Zestaw losujący: za każdym razem dostajesz ${total} losowych pytań z puli ${pool}.`) : '',
         open ? h('div', { class: 'note' }, `Masz rozpoczęte podejście (${fmtDT(open.started_at)}): odpowiedzi ${toNum(open.answered)} z ${total}. Możesz je dokończyć.`) : '',
         h('div', { class: 'meta' }, last
           ? `Ukończono: ${done.length}× · ostatni wynik: ${last.correct} z ${toNum(last.correct) + toNum(last.wrong)}` + (toNum(last.manual) ? ` (+${last.manual} do oceny)` : '')
@@ -2496,11 +2520,11 @@ async function loadProfileData(stu) {
     const as = await sb.from('assignments').select('quiz_id').eq('student_id', stu.id);
     if (as.error) throw as.error;
     const ids = as.data.map(x => x.quiz_id);
-    qz = ids.length ? await sb.from('quizzes').select('id,title,category_id').in('id', ids).order('title', { ascending: true }) : { data: [] };
+    qz = ids.length ? await sb.from('quizzes').select('id,title,category_id,draw_count').in('id', ids).order('title', { ascending: true }) : { data: [] };
     rs = await sb.from('results_overview').select('*').eq('student_id', stu.id).order('started_at', { ascending: true });
   } else {
     [qz, rs] = await Promise.all([
-      sb.from('quizzes').select('id,title,category_id').order('title', { ascending: true }),
+      sb.from('quizzes').select('id,title,category_id,draw_count').order('title', { ascending: true }),
       sb.from('results_overview').select('*').order('started_at', { ascending: true })
     ]);
   }
@@ -2534,7 +2558,7 @@ async function renderProfile(box, stu) {
   try {
     const { qz, rs, qc } = await loadProfileData(stu);
     const P = computeProfile(rs, qz), A = computeAchievements(P);
-    const total = id => qc.filter(r => r.quiz_id === id).length;
+    const total = id => { const pool = qc.filter(r => r.quiz_id === id).length, z = qz.find(x => x.id === id); return z?.draw_count ? Math.min(z.draw_count, pool) : pool; };
     const pct = v => `${Math.round(v * 100)}%`;
     const bar = (v, cls = '') => h('div', { class: 'pbar ' + cls }, h('div', { style: `width:${Math.max(0, Math.min(1, v)) * 100}%` }));
     const stat = (big, label, sub) => h('div', { class: 'stat' }, h('div', { class: 'big' }, big), h('div', {}, label), sub ? h('div', { class: 'hint' }, sub) : '');
@@ -2597,7 +2621,7 @@ const SETS = { list: [], qq: [], as: [], students: [], cur: null, curCat: null, 
 
 async function loadSetsData() {
   const [qz, qq, as, st, ct] = await Promise.all([
-    sb.from('quizzes').select('id,title,description,mode,published,category_id,created_at').order('created_at', { ascending: false }),
+    sb.from('quizzes').select('id,title,description,mode,published,category_id,created_at,draw_count').order('created_at', { ascending: false }),
     sb.from('quiz_questions').select('quiz_id,question_id,position'),
     sb.from('assignments').select('quiz_id,student_id'),
     sb.from('profiles').select('id,full_name,login,class_name,active').eq('role', 'student')
@@ -2624,10 +2648,10 @@ function openSet(id, category = '') {
   const z = id ? SETS.list.find(x => x.id === id) : null;
   SETS.curCat = null;
   SETS.cur = z
-    ? { id: z.id, category: z.category_id || '', title: z.title, description: z.description || '', mode: z.mode, published: z.published,
+    ? { id: z.id, category: z.category_id || '', title: z.title, description: z.description || '', mode: z.mode, published: z.published, drawOn: !!z.draw_count, drawN: z.draw_count || 5,
         qids: SETS.qq.filter(r => r.quiz_id === id).sort((a, b) => a.position - b.position).map(r => r.question_id),
         sids: new Set(SETS.as.filter(r => r.quiz_id === id).map(r => r.student_id)) }
-    : { id: null, category, title: '', description: '', mode: 'practice', published: false, qids: [], sids: new Set() };
+    : { id: null, category, title: '', description: '', mode: 'practice', published: false, drawOn: false, drawN: 5, qids: [], sids: new Set() };
   SETS.orig = { qids: [...SETS.cur.qids], sids: new Set(SETS.cur.sids) };
   if (SETS.cur.category) revealCategory(SETS.cur.category);
   renderSets();
@@ -2664,7 +2688,7 @@ function renderSets() {
   const setRow = (z, depth) => {
     const nq = SETS.qq.filter(r => r.quiz_id === z.id).length, ns = SETS.as.filter(r => r.quiz_id === z.id).length;
     return h('div', { class: 'qrow' + (SETS.cur && SETS.cur.id === z.id ? ' sel' : ''), style: `margin-left:${depth * 14}px`, onclick: () => openSet(z.id) },
-      h('div', { class: 't' }, h('b', {}, z.title || '(bez nazwy)'), h('span', {}, `${nq} pytań · ${ns} uczniów`)),
+      h('div', { class: 't' }, h('b', {}, z.title || '(bez nazwy)'), h('span', {}, (z.draw_count ? `🎲 losuje ${Math.min(z.draw_count, nq)} z ${nq} pytań` : `${nq} pytań`) + ` · ${ns} uczniów`)),
       h('span', { class: 'badge ' + (z.published ? 'on' : '') }, z.published ? 'opublikowany' : 'szkic'));
   };
   const byCat = new Map();
@@ -2764,6 +2788,7 @@ function questionPicker() {
   const draw = () => {
     box.replaceChildren();
     c.qids = c.qids.filter(id => byId.has(id));
+    c.onPoolChange?.();
     const chosen = h('div', { class: 'pick' });
     if (!c.qids.length) chosen.append(h('p', { class: 'hint' }, 'Nie wybrano jeszcze pytań. Dodaj je z listy poniżej.'));
     c.qids.forEach((id, i) => {
@@ -2826,7 +2851,7 @@ function studentPicker() {
 }
 
 async function saveSet(c, orig) {
-  const base = { title: c.title.trim(), description: c.description.trim(), mode: c.mode, published: !!c.published, category_id: c.category || null };
+  const base = { title: c.title.trim(), description: c.description.trim(), mode: c.mode, published: !!c.published, category_id: c.category || null, draw_count: c.drawOn ? Math.floor(Number(c.drawN)) : null };
   let id = c.id;
   if (!id) {
     const r = await sb.from('quizzes').insert(base).select('id').single();
@@ -2875,13 +2900,32 @@ function setForm() {
   card.append(field('Rodzaj', modeSel, 'Na razie oba rodzaje działają tak samo: odpowiedzi ocenia przeglądarka ucznia.'));
   const pub = h('input', { type: 'checkbox' }); pub.checked = !!c.published; pub.onchange = () => { c.published = pub.checked; };
   card.append(h('label', { class: 'opt' }, pub, h('span', {}, 'Opublikowany – przypisani uczniowie widzą ten zestaw')));
-  card.append(field('Pytania w zestawie (w kolejności zadawania)', questionPicker()));
+  const drawOn = h('input', { type: 'checkbox' }); drawOn.checked = !!c.drawOn;
+  const drawN = h('input', { type: 'number', min: '1', step: '1', style: 'width:90px' }); drawN.value = c.drawN;
+  const drawInfo = h('span', { class: 'hint', style: 'margin-left:8px' });
+  const syncDraw = () => {
+    drawN.disabled = !c.drawOn;
+    const pool = c.qids.length, n = Math.floor(Number(c.drawN)) || 0;
+    drawInfo.textContent = !c.drawOn ? '' : !pool ? 'Najpierw dodaj pytania do puli.' : n > pool ? `⚠ W puli jest tylko ${pool} pytań.` : n < 1 ? '⚠ Podaj liczbę pytań (min. 1).' : `Pula: ${pool} pytań – uczeń dostanie ${n} losowych (przy kolejnych podejściach starannie unikamy powtórek).`;
+  };
+  drawOn.onchange = () => { c.drawOn = drawOn.checked; syncDraw(); };
+  drawN.oninput = () => { c.drawN = drawN.value; syncDraw(); };
+  c.onPoolChange = syncDraw;
+  card.append(h('div', { class: 'field' }, h('label', { class: 'opt' }, drawOn, h('span', {}, 'Zestaw losujący – uczeń dostaje losowe pytania z puli')),
+    h('div', {}, 'Liczba pytań dla ucznia: ', drawN, drawInfo)));
+  syncDraw();
+  card.append(field(c.drawOn ? 'Pula pytań' : 'Pytania w zestawie (w kolejności zadawania)', questionPicker(), 'W zestawie losującym kolejność w puli nie ma znaczenia.'));
   card.append(field('Uczniowie, którzy dostają ten zestaw', studentPicker()));
 
   const save = h('button', { class: 'primary', type: 'button' }, 'Zapisz zestaw');
   save.onclick = async () => {
     if (!c.title.trim()) { say('Podaj nazwę zestawu.', 'bad'); return; }
     if (c.published && !c.qids.length) { say('Opublikowany zestaw musi mieć co najmniej jedno pytanie.', 'bad'); return; }
+    if (c.drawOn) {
+      const n = Math.floor(Number(c.drawN));
+      if (!(n >= 1)) { say('Podaj, ile pytań ma losować zestaw (co najmniej 1).', 'bad'); return; }
+      if (c.qids.length && n > c.qids.length) { say(`Zestaw ma losować ${n} pytań, a w puli jest ich tylko ${c.qids.length}.`, 'bad'); return; }
+    }
     save.disabled = true; say('Zapisywanie…');
     try {
       const id = await saveSet(c, SETS.orig);
