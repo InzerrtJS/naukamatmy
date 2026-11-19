@@ -600,6 +600,10 @@ const blankMini = (kind = 'choice') => ({ kind, prompt: '', options: ['', ''], c
 // Porównanie krótkiej odpowiedzi: bez różnicy wielkości liter i spacji, przecinek = kropka dziesiętna.
 const miniNorm = s => norm(s).replace(/(\d),(\d)/g, '$1.$2');
 const miniTextOk = (mini, v) => !!miniNorm(v) && nonEmpty(mini.accepted).map(miniNorm).includes(miniNorm(v));
+// Mini-pytanie wyboru: poprawna odpowiedź to liczba (jedna) albo tablica (kilka). Przy kilku poprawnych uczeń zaznacza dowolną liczbę
+// odpowiedzi, a wskazanie niepustego podzbioru poprawnych (bez żadnej błędnej) jest uznawane za poprawne.
+const miniCorrectList = m => (Array.isArray(m && m.correct) ? m.correct : Number.isInteger(m && m.correct) ? [m.correct] : []);
+const miniChoiceOk = (m, sel) => { const c = miniCorrectList(m); return sel.length > 0 && sel.every(i => c.includes(i)); };
 const blankHint = () => ({ text: '', mini: null });
 // Ujednolica podpowiedź (także starą, zapisaną jako zwykły tekst).
 const normHint = x => {
@@ -615,7 +619,9 @@ const normHint = x => {
       accepted: (Array.isArray(m.accepted) && m.accepted.length ? m.accepted : ['']).map(o => String(o ?? '')),
       prompt: String(m.prompt ?? ''),
       options: (Array.isArray(m.options) ? m.options : []).map(o => String(o ?? '')),
-      correct: Number.isInteger(m.correct) ? m.correct : null
+      correct: Array.isArray(m.correct)
+        ? (() => { const u = [...new Set(m.correct.filter(Number.isInteger))].sort((a, b) => a - b); return u.length > 1 ? u : u.length ? u[0] : null; })()
+        : Number.isInteger(m.correct) ? m.correct : null
     } : null
   };
 };
@@ -696,7 +702,7 @@ function problems(q) {
     }
     if (m.kind === 'text') { if (!nonEmpty(m.accepted).length) p.push(pre + 'podaj co najmniej jedną poprawną odpowiedź.'); return; }
     if (mo.length < 2 || mo.some(o => !String(o ?? '').trim())) p.push(pre + 'potrzebne co najmniej 2 niepuste odpowiedzi.');
-    else if (!(Number.isInteger(m.correct) && m.correct >= 0 && m.correct < mo.length)) p.push(pre + 'zaznacz poprawną odpowiedź.');
+    else if (!(miniCorrectList(m).length && miniCorrectList(m).every(c => Number.isInteger(c) && c >= 0 && c < mo.length))) p.push(pre + 'zaznacz poprawną odpowiedź.');
   });
   return p;
 }
@@ -720,6 +726,9 @@ function removeOption(q, i) {
   q.options.splice(i, 1);
   if (q.type === 'multi') {
     q.correct = q.correct.filter(c => c !== i).map(c => (c > i ? c - 1 : c));
+  } else if (Array.isArray(q.correct)) {   // mini-pytanie z kilkoma poprawnymi odpowiedziami
+    const l = q.correct.filter(c => c !== i).map(c => (c > i ? c - 1 : c));
+    q.correct = l.length > 1 ? l : l.length ? l[0] : null;
   } else {   // jednokrotny wybór (także mini-pytania w podpowiedziach, które nie mają pola type)
     if (q.correct === i) q.correct = null;
     else if (Number.isInteger(q.correct) && q.correct > i) q.correct -= 1;
@@ -1120,6 +1129,29 @@ function buildMini(mini, name, qi, hi) {
     btn.onclick = check;
     inp.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); check(); } });
     box.append(h('div', { class: 'optrow' }, inp, btn), fbm);
+    return box;
+  }
+  if (miniCorrectList(mini).length > 1) {     // kilka poprawnych odpowiedzi: wybór wielokrotny, uznawany jest każdy poprawny podzbiór
+    const inputs = mini.options.map((o, i) => h('input', { type: 'checkbox', value: String(i) }));
+    const btn = h('button', { class: 'secondary small', type: 'button' }, 'Sprawdź');
+    box.append(h('div', { class: 'hint' }, 'Zaznacz odpowiedzi, które uważasz za poprawne (może być więcej niż jedna).'));
+    mini.options.forEach((o, i) => box.append(h('label', { class: 'opt' }, inputs[i], rich('span', o))));
+    btn.onclick = () => {
+      if (rec.solved) return;
+      const sel = inputs.map((x, i) => (x.checked ? i : -1)).filter(i => i >= 0);
+      if (!sel.length) return;
+      rec.attempts++;
+      if (miniChoiceOk(mini, sel)) {
+        rec.solved = true; btn.disabled = true; inputs.forEach(x => { x.disabled = true; });
+        inputs.forEach((x, i) => { if (x.checked) x.parentElement.classList.add('ok'); });
+        fbm.className = 'minifb ok'; fbm.textContent = '✓ Dobrze!';
+      } else {
+        inputs.forEach((x, i) => { if (x.checked && !miniCorrectList(mini).includes(i)) x.parentElement.classList.add('bad'); });
+        fbm.className = 'minifb bad'; fbm.textContent = '✗ Wśród zaznaczonych jest błędna odpowiedź – spróbuj jeszcze raz.';
+        inputs.forEach(x => x.addEventListener('change', () => { x.parentElement.classList.remove('bad'); }, { once: true }));
+      }
+    };
+    box.append(h('div', { style: 'margin-top:6px' }, btn), fbm);
     return box;
   }
   mini.options.forEach((o, i) => {
@@ -1680,9 +1712,13 @@ function miniEditor(mini, changed) {
       return;
     }
     mini.options.forEach((o, i) => {
-      const mark = h('input', { type: 'radio', name, title: 'Poprawna odpowiedź' });
-      mark.checked = mini.correct === i;
-      mark.addEventListener('change', () => { mini.correct = i; changed(); });
+      const mark = h('input', { type: 'checkbox', title: 'Poprawna odpowiedź' });
+      mark.checked = miniCorrectList(mini).includes(i);
+      mark.addEventListener('change', () => {
+        const l = new Set(miniCorrectList(mini)); if (mark.checked) l.add(i); else l.delete(i);
+        const a = [...l].sort((x, y) => x - y); mini.correct = a.length > 1 ? a : a.length ? a[0] : null;
+        changed(); draw();
+      });
       const inp = textInput(o, v => { mini.options[i] = v; changed(); }, `Odpowiedź ${i + 1} (wzory w $…$)`);
       const del = h('button', { class: 'secondary small danger', type: 'button', title: 'Usuń odpowiedź', onclick: () => {
         if (removeOption(mini, i)) { changed(); draw(); }
@@ -1691,7 +1727,7 @@ function miniEditor(mini, changed) {
       wrap.append(h('div', { class: 'optrow' }, mark, inp, del));
     });
     wrap.append(h('button', { class: 'secondary small', type: 'button', onclick: () => { mini.options.push(''); changed(); draw(); } }, '+ Dodaj odpowiedź'));
-    wrap.append(h('div', { class: 'hint' }, 'Zaznacz kółkiem jedną poprawną odpowiedź.'));
+    wrap.append(h('div', { class: 'hint' }, 'Zaznacz jedną lub więcej poprawnych odpowiedzi. Gdy zaznaczysz kilka, uczeń wybiera odpowiedzi z listy pól (wielokrotny wybór), a poprawne jest zaznaczenie dowolnego podzbioru poprawnych odpowiedzi, o ile nie ma wśród nich błędnej.'));
   };
   draw();
   return wrap;
@@ -2034,7 +2070,7 @@ const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 const reportsEl = document.getElementById('reports');
 
-const APP_VERSION = '2026-11-17 · lista odpowiedzi';
+const APP_VERSION = '2026-11-19 · mini-pytania z wieloma poprawnymi';
 // Motyw: auto (jak system) → jasny → ciemny; wybór pamiętany w przeglądarce
 {
   const KEY = 'quiz-theme', btn = document.getElementById('themebtn');
