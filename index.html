@@ -768,6 +768,14 @@ function drawQuestions(ids, n, seen = new Set(), rnd = Math.random) {
   return shuffle([...fresh, ...old].slice(0, k));
 }
 
+// Czy ustawienie, że zestaw `id` wymaga zestawu `target`, utworzyłoby pętlę (A wymaga B, B wymaga A)?
+function unlockCycle(list, id, target) {
+  const by = new Map(list.map(z => [z.id, z.unlock_quiz_id]));
+  const seen = new Set();
+  for (let cur = target; cur && !seen.has(cur); cur = by.get(cur)) { if (cur === id) return true; seen.add(cur); }
+  return false;
+}
+
 /* --- profil ucznia: statystyki i osiągnięcia liczone z zapisanych podejść --- */
 const dayKey = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const scoreOf = r => { const g = (Number(r.correct) || 0) + (Number(r.wrong) || 0); return g ? (Number(r.correct) || 0) / g : null; };
@@ -1365,7 +1373,7 @@ function showSummary() {
   // w podejściu ucznia: zapis wyniku w bazie i powrót do listy zestawów
   const student = QCTX.kind === 'student';
   const saveNote = h('p', { class: 'hint' });
-  const saveWrap = h('div'), achBox = h('div');
+  const saveWrap = h('div'), achBox = h('div'), setsBox = h('div');
   if (student) {
     if (!QCTX.skippedSent) {             // pominięte pytania zapisujemy jako niepoprawne (bez odpowiedzi)
       QCTX.skippedSent = true;
@@ -1378,7 +1386,7 @@ function showSummary() {
     const doSave = () => {
       saveWrap.replaceChildren(h('p', { class: 'hint' }, 'Zapisywanie wyniku…'));
       QCTX.onFinish().then(res => {
-        if (res.ok) { saveWrap.replaceChildren(h('div', { class: 'note good' }, 'Wynik został zapisany.')); announceAchievements(achBox); return; }
+        if (res.ok) { saveWrap.replaceChildren(h('div', { class: 'note good' }, 'Wynik został zapisany.')); announceAchievements(achBox); announceNewSets(setsBox); return; }
         saveWrap.replaceChildren(h('div', { class: 'note bad' }, 'Nie udało się zapisać wyniku: ' + res.error + ' '),
           h('button', { class: 'secondary small', type: 'button', onclick: () => { QCTX.resultPromise = null; doSave(); } }, 'Spróbuj ponownie'));
       });
@@ -1393,7 +1401,7 @@ function showSummary() {
     ...(hintsAll ? [h('p', {}, `Wykorzystane podpowiedzi: ${hintsUsed} z ${hintsAll}.`)] : []),
     ...(minis.length ? [h('p', {}, `Mini-pytania w podpowiedziach: rozwiązane ${minis.filter(m => m.solved).length} z ${minis.length} odsłoniętych, łącznie prób: ${minis.reduce((a, m) => a + m.attempts, 0)}.`)] : []),
     h('div', { style: 'margin-bottom:16px' }, rows),
-    ...(student ? [saveWrap, achBox] : []),
+    ...(student ? [saveWrap, achBox, setsBox] : []),
     student
       ? h('button', { class: 'primary', onclick: () => QCTX.onExit() }, 'Wróć do listy zestawów')
       : h('button', { class: 'primary', onclick: () => { resetSession(); showQuestion(); } }, 'Zacznij od nowa')));
@@ -2070,7 +2078,7 @@ const resultsEl = document.getElementById('results');
 const studentsEl = document.getElementById('students');
 const reportsEl = document.getElementById('reports');
 
-const APP_VERSION = '2026-11-19 · mini-pytania z wieloma poprawnymi';
+const APP_VERSION = '2026-11-24 · odblokowywanie zestawów';
 // Motyw: auto (jak system) → jasny → ciemny; wybór pamiętany w przeglądarce
 {
   const KEY = 'quiz-theme', btn = document.getElementById('themebtn');
@@ -2450,6 +2458,7 @@ async function showHome() {
     if (qc.error) throw qc.error;
     if (ct.error) throw ct.error;
     const out = [h('h2', { style: 'margin-top:0' }, `Cześć${ME.full_name ? ', ' + ME.full_name : ''}!`)];
+    const seenSets = setsSeen(); setsSave(qz.data.map(z => z.id));
     if (!qz.data.length) out.push(h('div', { class: 'note' }, 'Nie masz jeszcze przypisanych zestawów. Poproś nauczyciela o udostępnienie zestawu.'));
     const setCard = z => {
       const done = rs.data.filter(r => r.quiz_id === z.id && r.finished_at);
@@ -2458,7 +2467,7 @@ async function showHome() {
       const open = newest && !newest.finished_at ? newest : null;                  // niedokończone = można kontynuować
       const pool = qc.data.filter(r => r.quiz_id === z.id).length, total = z.draw_count ? Math.min(z.draw_count, pool) : pool;
       return h('div', { class: 'card setcard' },
-        h('h3', {}, z.title),
+        h('h3', {}, z.title, seenSets && !seenSets.has(z.id) ? h('span', { class: 'badge on', style: 'margin-left:8px' }, 'Nowy') : ''),
         z.description ? h('p', { class: 'hint' }, z.description) : '',
         z.draw_count ? h('div', { class: 'hint' }, `🎲 Zestaw losujący: za każdym razem dostajesz ${total} losowych pytań z puli ${pool}.`) : '',
         open ? h('div', { class: 'note' }, `Masz rozpoczęte podejście (${fmtDT(open.started_at)}): odpowiedzi ${toNum(open.answered)} z ${total}. Możesz je dokończyć.`) : '',
@@ -2659,6 +2668,24 @@ async function announceAchievements(box) {
   } catch (e) { console.warn('Osiągnięcia niedostępne:', e); }
 }
 
+// Zestawy widoczne dla ucznia przy ostatniej wizycie (pamiętane w przeglądarce) – żeby pokazać, że pojawił się nowy.
+const setsKey = () => 'quiz:sets:' + (ME?.id || '');
+function setsSeen() { try { const v = localStorage.getItem(setsKey()); return v === null ? null : new Set(JSON.parse(v)); } catch (e) { return null; } }
+function setsSave(ids) { try { localStorage.setItem(setsKey(), JSON.stringify(ids)); } catch (e) { /* brak */ } }
+// Komunikat po zakończeniu testu: czy dzięki niemu odblokował się (albo pojawił) nowy zestaw.
+async function announceNewSets(box) {
+  try {
+    const r = await sb.from('quizzes').select('id,title'); if (r.error) throw r.error;
+    const seen = setsSeen(), fresh = seen ? r.data.filter(z => !seen.has(z.id)) : [];
+    setsSave(r.data.map(z => z.id));
+    if (!fresh.length) return;
+    box.replaceChildren(h('div', { class: 'note good ach-new' },
+      h('b', {}, fresh.length > 1 ? '🔓 Nowe zestawy są już dostępne!' : '🔓 Nowy zestaw jest już dostępny!'),
+      ...fresh.map(z => h('div', {}, rich('b', z.title))),
+      h('div', { class: 'rowbtns' }, h('button', { class: 'secondary small', type: 'button', onclick: () => activateTab('home') }, 'Przejdź do listy zestawów'))));
+  } catch (e) { console.warn('Nowe zestawy – brak danych:', e); }
+}
+
 function showProfile() { return renderProfile(profileEl, null); }
 async function renderProfile(box, stu) {
   box.replaceChildren(loadingBox());
@@ -2728,7 +2755,7 @@ const SETS = { list: [], qq: [], as: [], students: [], cur: null, curCat: null, 
 
 async function loadSetsData() {
   const [qz, qq, as, st, ct] = await Promise.all([
-    sb.from('quizzes').select('id,title,description,mode,published,category_id,created_at,draw_count').order('created_at', { ascending: false }),
+    sb.from('quizzes').select('id,title,description,mode,published,category_id,created_at,draw_count,unlock_quiz_id,unlock_attempts,unlock_min_percent').order('created_at', { ascending: false }),
     sb.from('quiz_questions').select('quiz_id,question_id,position'),
     sb.from('assignments').select('quiz_id,student_id'),
     sb.from('profiles').select('id,full_name,login,class_name,active').eq('role', 'student')
@@ -2756,9 +2783,10 @@ function openSet(id, category = '') {
   SETS.curCat = null;
   SETS.cur = z
     ? { id: z.id, category: z.category_id || '', title: z.title, description: z.description || '', mode: z.mode, published: z.published, drawOn: !!z.draw_count, drawN: z.draw_count || 5,
+        unlockQ: z.unlock_quiz_id || '', unlockN: z.unlock_attempts || 1, unlockP: z.unlock_min_percent || '',
         qids: SETS.qq.filter(r => r.quiz_id === id).sort((a, b) => a.position - b.position).map(r => r.question_id),
         sids: new Set(SETS.as.filter(r => r.quiz_id === id).map(r => r.student_id)) }
-    : { id: null, category, title: '', description: '', mode: 'practice', published: false, drawOn: false, drawN: 5, qids: [], sids: new Set() };
+    : { id: null, category, title: '', description: '', mode: 'practice', published: false, drawOn: false, drawN: 5, unlockQ: '', unlockN: 1, unlockP: '', qids: [], sids: new Set() };
   SETS.orig = { qids: [...SETS.cur.qids], sids: new Set(SETS.cur.sids) };
   if (SETS.cur.category) revealCategory(SETS.cur.category);
   renderSets();
@@ -2795,7 +2823,8 @@ function renderSets() {
   const setRow = (z, depth) => {
     const nq = SETS.qq.filter(r => r.quiz_id === z.id).length, ns = SETS.as.filter(r => r.quiz_id === z.id).length;
     return h('div', { class: 'qrow' + (SETS.cur && SETS.cur.id === z.id ? ' sel' : ''), style: `margin-left:${depth * 14}px`, onclick: () => openSet(z.id) },
-      h('div', { class: 't' }, h('b', {}, z.title || '(bez nazwy)'), h('span', {}, (z.draw_count ? `🎲 losuje ${Math.min(z.draw_count, nq)} z ${nq} pytań` : `${nq} pytań`) + ` · ${ns} uczniów`)),
+      h('div', { class: 't' }, h('b', {}, z.title || '(bez nazwy)'), h('span', {}, (z.draw_count ? `🎲 losuje ${Math.min(z.draw_count, nq)} z ${nq} pytań` : `${nq} pytań`) + ` · ${ns} uczniów`
+        + (z.unlock_quiz_id ? ` · 🔒 po ${z.unlock_attempts || 1}× „${plainTitle({ prompt: SETS.list.find(x => x.id === z.unlock_quiz_id)?.title || '?' })}”${z.unlock_min_percent ? ` (≥${z.unlock_min_percent}%)` : ''}` : ''))),
       h('span', { class: 'badge ' + (z.published ? 'on' : '') }, z.published ? 'opublikowany' : 'szkic'));
   };
   const byCat = new Map();
@@ -2958,7 +2987,9 @@ function studentPicker() {
 }
 
 async function saveSet(c, orig) {
-  const base = { title: c.title.trim(), description: c.description.trim(), mode: c.mode, published: !!c.published, category_id: c.category || null, draw_count: c.drawOn ? Math.floor(Number(c.drawN)) : null };
+  const base = { title: c.title.trim(), description: c.description.trim(), mode: c.mode, published: !!c.published, category_id: c.category || null, draw_count: c.drawOn ? Math.floor(Number(c.drawN)) : null,
+    unlock_quiz_id: c.unlockQ || null, unlock_attempts: c.unlockQ ? Math.floor(Number(c.unlockN)) : null,
+    unlock_min_percent: c.unlockQ && String(c.unlockP).trim() !== '' ? Math.floor(Number(c.unlockP)) : null };
   let id = c.id;
   if (!id) {
     const r = await sb.from('quizzes').insert(base).select('id').single();
@@ -3021,6 +3052,26 @@ function setForm() {
   card.append(h('div', { class: 'field' }, h('label', { class: 'opt' }, drawOn, h('span', {}, 'Zestaw losujący – uczeń dostaje losowe pytania z puli')),
     h('div', {}, 'Liczba pytań dla ucznia: ', drawN, drawInfo)));
   syncDraw();
+  // warunek odblokowania: zestaw pojawia się uczniowi dopiero po spełnieniu warunku
+  const unlockSel = h('select'), unlockN = h('input', { type: 'number', min: '1', step: '1', style: 'width:80px' }),
+    unlockP = h('input', { type: 'number', min: '1', max: '100', step: '1', placeholder: 'dowolny', style: 'width:90px' }),
+    unlockInfo = h('div', { class: 'hint' }), unlockRow = h('div', { style: 'margin-top:6px' });
+  unlockSel.append(h('option', { value: '' }, '— brak (zestaw dostępny od razu)'));
+  SETS.list.filter(x => x.id !== c.id && !unlockCycle(SETS.list, c.id, x.id)).forEach(x => unlockSel.append(h('option', { value: x.id }, plainTitle({ prompt: x.title || '(bez nazwy)' }))));
+  unlockSel.value = c.unlockQ; if (unlockSel.value !== c.unlockQ) { c.unlockQ = ''; unlockSel.value = ''; }
+  unlockN.value = c.unlockN; unlockP.value = c.unlockP;
+  const syncUnlock = () => {
+    unlockRow.hidden = !c.unlockQ;
+    const src = SETS.list.find(x => x.id === c.unlockQ), n = Math.floor(Number(c.unlockN)) || 0, pr = String(c.unlockP).trim();
+    unlockInfo.textContent = !c.unlockQ ? '' : n < 1 ? '⚠ Podaj liczbę podejść (min. 1).'
+      : `Uczeń zobaczy ten zestaw dopiero po ukończeniu ${n} ${n === 1 ? 'podejścia' : 'podejść'} do „${src ? plainTitle({ prompt: src.title }) : '?'}”${pr ? ` z wynikiem co najmniej ${pr}%` : ''}. Do tego czasu zestaw jest dla niego niewidoczny.`;
+  };
+  unlockSel.onchange = () => { c.unlockQ = unlockSel.value; syncUnlock(); };
+  unlockN.oninput = () => { c.unlockN = unlockN.value; syncUnlock(); };
+  unlockP.oninput = () => { c.unlockP = unlockP.value; syncUnlock(); };
+  unlockRow.append('Wymagana liczba ukończonych podejść: ', unlockN, ' · minimalny wynik w podejściu (%): ', unlockP);
+  card.append(h('div', { class: 'field' }, h('label', {}, 'Warunek odblokowania'), unlockSel, unlockRow, unlockInfo));
+  syncUnlock();
   card.append(field(c.drawOn ? 'Pula pytań' : 'Pytania w zestawie (w kolejności zadawania)', questionPicker(), 'W zestawie losującym kolejność w puli nie ma znaczenia.'));
   card.append(field('Uczniowie, którzy dostają ten zestaw', studentPicker()));
 
@@ -3032,6 +3083,12 @@ function setForm() {
       const n = Math.floor(Number(c.drawN));
       if (!(n >= 1)) { say('Podaj, ile pytań ma losować zestaw (co najmniej 1).', 'bad'); return; }
       if (c.qids.length && n > c.qids.length) { say(`Zestaw ma losować ${n} pytań, a w puli jest ich tylko ${c.qids.length}.`, 'bad'); return; }
+    }
+    if (c.unlockQ) {
+      if (!(Math.floor(Number(c.unlockN)) >= 1)) { say('Podaj wymaganą liczbę ukończonych podejść (co najmniej 1).', 'bad'); return; }
+      const pr = String(c.unlockP).trim();
+      if (pr !== '' && !(Math.floor(Number(pr)) >= 1 && Math.floor(Number(pr)) <= 100)) { say('Wymagany wynik musi być z zakresu 1–100% (albo zostaw pole puste).', 'bad'); return; }
+      if (unlockCycle(SETS.list, c.id, c.unlockQ)) { say('Ten warunek tworzy pętlę (zestawy wzajemnie na siebie czekają).', 'bad'); return; }
     }
     save.disabled = true; say('Zapisywanie…');
     try {
